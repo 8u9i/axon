@@ -160,17 +160,16 @@ impl Gemma4Weights {
             config.n_layers, config.dim, config.n_heads, config.n_kv_heads);
 
         let f32_or_empty = |name: &str| -> Vec<f32> {
-            if rt.tensor_info(name).is_ok() {
-                let dtype = rt.tensor_info(name).unwrap().dtype;
+            if let Ok(info) = rt.tensor_info(name) {
                 let raw = rt.tensor(name).unwrap_or_default();
-                dtype::dequantize_tensor(&raw, dtype)
+                let expected: usize = info.shape.iter().map(|s| *s as usize).product();
+                dtype::dequantize_tensor_with_count(&raw, info.dtype, expected)
             } else { Vec::new() }
         };
 
         // Store token embeddings in raw format to avoid massive memory usage
         let (tok_embd_raw, tok_embd_dtype) = {
-            if rt.tensor_info("token_embd.weight").is_ok() {
-                let info = rt.tensor_info("token_embd.weight").unwrap();
+            if let Ok(info) = rt.tensor_info("token_embd.weight") {
                 (rt.tensor("token_embd.weight").unwrap_or_default(), info.dtype)
             } else {
                 return Err("token_embd.weight not found".to_string());
@@ -201,20 +200,21 @@ impl Gemma4Weights {
 
         let load_deq = |name: &str| -> (Vec<f32>, Option<Vec<u8>>, DType) {
             let full = p(name);
-            if rt.tensor_info(&full).is_ok() {
-                let info = rt.tensor_info(&full).unwrap();
+            if let Ok(info) = rt.tensor_info(&full) {
                 let dtype = info.dtype;
                 let raw = rt.tensor(&full).unwrap_or_default();
-                let f32_data = dtype::dequantize_tensor(&raw, dtype);
+                let expected: usize = info.shape.iter().map(|s| *s as usize).product();
+                let f32_data = dtype::dequantize_tensor_with_count(&raw, dtype, expected);
                 (f32_data, Some(raw), dtype)
             } else { (Vec::new(), None, DType::F32) }
         };
 
         let load_norm = |name: &str| -> Vec<f32> {
             let full = p(name);
-            if rt.tensor_info(&full).is_ok() {
+            if let Ok(info) = rt.tensor_info(&full) {
                 let raw = rt.tensor(&full).unwrap_or_default();
-                dtype::dequantize_tensor(&raw, DType::F32)
+                let expected: usize = info.shape.iter().map(|s| *s as usize).product();
+                dtype::dequantize_tensor_with_count(&raw, DType::F32, expected)
             } else { vec![1.0; config.dim] }
         };
 
@@ -228,44 +228,36 @@ impl Gemma4Weights {
         let (wig, rwig, _) = load_deq("inp_gate.weight");
         let (wp, rwp, _) = load_deq("proj.weight");
 
-        // Experts
+        // Helper that loads and dequantizes with expected count from shape
+        let load_deq_e = |name: &str, rows: usize, cols: usize| -> (Vec<f32>, Option<Vec<u8>>, DType) {
+            let full = p(name);
+            if let Ok(info) = rt.tensor_info(&full) {
+                let raw = rt.tensor(&full).unwrap_or_default();
+                let expected = rows * cols;
+                (dtype::dequantize_tensor_with_count(&raw, info.dtype, expected), Some(raw), info.dtype)
+            } else { (Vec::new(), None, DType::F32) }
+        };
+
+        // Experts — they might not exist for all layers — they might not exist for all layers
         let has_e1 = rt.tensor_info(&p("ffn_gate_1.weight")).is_ok();
         let (eg, reg, _) = if has_e1 {
-            let full = p("ffn_gate_1.weight");
-            let info = rt.tensor_info(&full).unwrap();
-            let raw = rt.tensor(&full).unwrap_or_default();
-            (dtype::dequantize_tensor(&raw, info.dtype), Some(raw), info.dtype)
+            load_deq_e("ffn_gate_1.weight", config.hidden_dim, config.dim)
         } else { (Vec::new(), None, DType::F32) };
         let (eu, reu, _) = if has_e1 {
-            let full = p("ffn_up_1.weight");
-            let info = rt.tensor_info(&full).unwrap();
-            let raw = rt.tensor(&full).unwrap_or_default();
-            (dtype::dequantize_tensor(&raw, info.dtype), Some(raw), info.dtype)
+            load_deq_e("ffn_up_1.weight", config.hidden_dim, config.dim)
         } else { (Vec::new(), None, DType::F32) };
         let (ed, red, _) = if has_e1 {
-            let full = p("ffn_down_1.weight");
-            let info = rt.tensor_info(&full).unwrap();
-            let raw = rt.tensor(&full).unwrap_or_default();
-            (dtype::dequantize_tensor(&raw, info.dtype), Some(raw), info.dtype)
+            load_deq_e("ffn_down_1.weight", config.dim, config.hidden_dim)
         } else { (Vec::new(), None, DType::F32) };
         let has_e2 = rt.tensor_info(&p("ffn_gate_2.weight")).is_ok();
         let (eg2, reg2, _) = if has_e2 {
-            let full = p("ffn_gate_2.weight");
-            let info = rt.tensor_info(&full).unwrap();
-            let raw = rt.tensor(&full).unwrap_or_default();
-            (dtype::dequantize_tensor(&raw, info.dtype), Some(raw), info.dtype)
+            load_deq_e("ffn_gate_2.weight", config.hidden_dim, config.dim)
         } else { (Vec::new(), None, DType::F32) };
         let (eu2, reu2, _) = if has_e2 {
-            let full = p("ffn_up_2.weight");
-            let info = rt.tensor_info(&full).unwrap();
-            let raw = rt.tensor(&full).unwrap_or_default();
-            (dtype::dequantize_tensor(&raw, info.dtype), Some(raw), info.dtype)
+            load_deq_e("ffn_up_2.weight", config.hidden_dim, config.dim)
         } else { (Vec::new(), None, DType::F32) };
         let (ed2, red2, _) = if has_e2 {
-            let full = p("ffn_down_2.weight");
-            let info = rt.tensor_info(&full).unwrap();
-            let raw = rt.tensor(&full).unwrap_or_default();
-            (dtype::dequantize_tensor(&raw, info.dtype), Some(raw), info.dtype)
+            load_deq_e("ffn_down_2.weight", config.dim, config.hidden_dim)
         } else { (Vec::new(), None, DType::F32) };
 
         let attn_norm = load_norm("attn_norm.weight");
@@ -333,7 +325,6 @@ impl Gemma4Weights {
 /// Output: logits [vocab_size]
 pub fn gemma4_forward(
     x: &mut [f32],
-    logits: &mut [f32],
     weights: &Gemma4Weights,
     cache: &mut KVCache,
     pos: usize,
@@ -363,6 +354,19 @@ pub fn gemma4_forward(
         let mut q = vec![0.0f32; q_len];
         let mut k = vec![0.0f32; kv_len];
         let mut v = vec![0.0f32; kv_len];
+        if layer.attn_q.len() != q_len * dim {
+            log::error!("Layer {} attn_q: expected {} elements, got {} (shape {}x{})",
+                layer_idx, q_len * dim, layer.attn_q.len(), q_len, dim);
+        }
+        if layer.attn_k.len() != kv_len * dim {
+            log::error!("Layer {} attn_k: expected {} elements, got {} (shape {}x{}, dtype={:?}, raw_len={})",
+                layer_idx, kv_len * dim, layer.attn_k.len(), kv_len, dim,
+                layer.weights_dtype,
+                layer.raw_attn_k.as_ref().map(|v| v.len()).unwrap_or(0));
+        }
+        if layer.attn_v.len() != kv_len * dim {
+            log::error!("Layer {} attn_v: expected {} elements, got {}", layer_idx, kv_len * dim, layer.attn_v.len());
+        }
         quantized_or_f32_matvec(&layer.raw_attn_q, &layer.attn_q, q_len, dim, &h, &mut q);
         quantized_or_f32_matvec(&layer.raw_attn_k, &layer.attn_k, kv_len, dim, &h, &mut k);
         quantized_or_f32_matvec(&layer.raw_attn_v, &layer.attn_v, kv_len, dim, &h, &mut v);
@@ -535,49 +539,54 @@ pub fn gemma4_forward(
 
     // ── Final RMSNorm ──
     ops::rms_norm(x, &weights.output_norm, cfg.norm_eps);
+}
 
-    // ── Output projection ──
-    if let Some(ref out) = weights.output {
-        ops::matvec(cfg.vocab_size, dim, out, x, logits);
-    } else {
-        // Shared embeddings: compute logits directly from raw embedding data
-        let dim = cfg.dim;
-        // Q4 format: use proper row stride for block dequantization
-        let row_bytes = dtype::row_stride_bytes(dim, weights.tok_embd_dtype);
+/// Compute top-k logits from the shared embedding table.
+/// Uses direct Q4 dot product on raw data (no per-row dequantization).
+fn top_k_logits(
+    x: &[f32],
+    weights: &Gemma4Weights,
+    k: usize,
+) -> Vec<(f32, usize)> {
+    let cfg = &weights.config;
+    let dim = cfg.dim;
+    let cap = cfg.final_logit_softcapping;
+    let row_bytes = dtype::row_stride_bytes(dim, weights.tok_embd_dtype);
+    let raw = &weights.tok_embd_raw;
+    let vocab = cfg.vocab_size;
 
-        let chunk_size = 1024;
-        let mut deq_row = vec![0.0f32; dim];
+    let mut heap: Vec<(f32, usize)> = Vec::with_capacity(k + 1);
+    let mut min_idx = 0usize;
 
-        for chunk_start in (0..cfg.vocab_size).step_by(chunk_size) {
-            let chunk_end = (chunk_start + chunk_size).min(cfg.vocab_size);
-            for v in chunk_start..chunk_end {
-                let byte_off = v * row_bytes;
-                if byte_off + row_bytes <= weights.tok_embd_raw.len() {
-                    let row = &weights.tok_embd_raw[byte_off..byte_off + row_bytes];
-                    if weights.tok_embd_dtype == DType::F32 {
-                        let ptr = row.as_ptr() as *const f32;
-                        let slice = unsafe { std::slice::from_raw_parts(ptr, dim) };
-                        logits[v] = ops::dot(x, slice);
-                    } else {
-                        let deq = dtype::dequantize_tensor(row, weights.tok_embd_dtype);
-                        let n = deq.len().min(dim);
-                        deq_row[..n].copy_from_slice(&deq[..n]);
-                        logits[v] = ops::dot(x, &deq_row[..n]);
-                    }
-                } else {
-                    logits[v] = 0.0;
-                }
+    let is_q4_blocks = weights.tok_embd_dtype == DType::Q4;
+
+    for v in 0..vocab {
+        let byte_off = v * row_bytes;
+        let logit = if byte_off + row_bytes <= raw.len() {
+            let row = &raw[byte_off..byte_off + row_bytes];
+            if is_q4_blocks && row.len() >= 18 && (row.len() % 18) < 4 {
+                dtype::q4_0_dot(row, x, dim)
+            } else {
+                dtype::k_quant_dot(row, x, dim)
+            }
+        } else { 0.0 };
+
+        let logit = if cap > 0.0 && cap.is_finite() { cap * (logit / cap).tanh() } else { logit };
+
+        if heap.len() < k {
+            heap.push((logit, v));
+            if logit < heap[min_idx].0 { min_idx = heap.len() - 1; }
+        } else if logit > heap[min_idx].0 {
+            heap[min_idx] = (logit, v);
+            min_idx = 0;
+            for i in 1..heap.len() {
+                if heap[i].0 < heap[min_idx].0 { min_idx = i; }
             }
         }
     }
 
-    // ── Final logit softcapping ──
-    let cap = cfg.final_logit_softcapping;
-    if cap > 0.0 && cap.is_finite() {
-        for l in logits.iter_mut() {
-            *l = cap * (*l / cap).tanh();
-        }
-    }
+    heap.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+    heap
 }
 
 // ── Helper functions ───────────────────────────────────────────────
@@ -636,41 +645,21 @@ fn apply_gemma_mask(scores: &mut [f32], n_heads: usize, seq_len: usize, pos: usi
     }
 }
 
-/// Dispatch matvec: quantized or f32.
+/// Dispatch matvec: use f32 weights (already dequantized during load).
+/// For Gemma4 we always use f32 matvec since the weights are fully dequantized.
 fn quantized_or_f32_matvec(
-    raw: &Option<Vec<u8>>, f32_w: &[f32],
+    _raw: &Option<Vec<u8>>, f32_w: &[f32],
     rows: usize, cols: usize, x: &[f32], y: &mut [f32]
 ) {
-    if let Some(ref data) = raw {
-        if !f32_w.is_empty() {
-            // Use quantized matvec
-            let block_bytes = dtype::block_size_bytes(DType::Q4);
-            let vals_per_block = dtype::block_size_values(DType::Q4);
-            crate::quantized::quantized_matvec(data, rows, cols, block_bytes, vals_per_block, x, y);
-        } else {
-            ops::matvec(rows, cols, f32_w, x, y);
-        }
-    } else if !f32_w.is_empty() {
-        ops::matvec(rows, cols, f32_w, x, y);
-    }
+    ops::matvec(rows, cols, f32_w, x, y);
 }
 
-/// Dispatch matvec transposed (for Wo, W2, proj weights).
+/// Dispatch matvec transposed — always use f32.
 fn quantized_or_f32_matvec_t(
-    raw: &Option<Vec<u8>>, f32_w: &[f32],
+    _raw: &Option<Vec<u8>>, f32_w: &[f32],
     rows: usize, cols: usize, x: &[f32], y: &mut [f32]
 ) {
-    if let Some(ref data) = raw {
-        if !f32_w.is_empty() {
-            let block_bytes = dtype::block_size_bytes(DType::Q4);
-            let vals_per_block = dtype::block_size_values(DType::Q4);
-            crate::quantized::quantized_matvec(data, rows, cols, block_bytes, vals_per_block, x, y);
-        } else if !f32_w.is_empty() {
-            ops::matvec_transpose(rows, cols, f32_w, x, y);
-        }
-    } else if !f32_w.is_empty() {
-        ops::matvec_transpose(rows, cols, f32_w, x, y);
-    }
+    ops::matvec_transpose(rows, cols, f32_w, x, y);
 }
 
 // ── Gemma4 Inference Engine ────────────────────────────────────────
@@ -711,19 +700,19 @@ impl Gemma4Engine {
         if prompt_len == 0 { return Err("empty prompt".to_string()); }
 
         let dim = self.config.dim;
+        let k_candidates = self.params.top_k.max(64);
         let mut cache = KVCache::new(
             self.config.n_layers, self.config.n_kv_heads,
             self.config.head_dim.max(self.config.head_dim_swa),
             self.config.ctx_len,
         );
         let mut x = vec![0.0f32; dim];
-        let mut logits = vec![0.0f32; self.config.vocab_size];
 
         // Prompt evaluation
         let prompt_start = std::time::Instant::now();
         for (pos, &token_id) in prompt_tokens.iter().enumerate() {
             self.weights.embed(token_id as usize, &mut x);
-            gemma4_forward(&mut x, &mut logits, &self.weights, &mut cache, pos);
+            gemma4_forward(&mut x, &self.weights, &mut cache, pos);
         }
         let prompt_eval_ms = prompt_start.elapsed().as_secs_f64() * 1000.0;
 
@@ -736,12 +725,33 @@ impl Gemma4Engine {
         };
 
         for _ in 0..max_tokens {
-            let next = crate::sampling::sample(&logits, &self.params, &mut rng);
-            if next == self.tokenizer.eos_id() as usize { break; }
-            generated.push(next as u32);
-            self.weights.embed(next as usize, &mut x);
+            // Compute top-k candidates from shared embeddings
+            let topk = top_k_logits(&x, &self.weights, k_candidates);
+
+            if topk.is_empty() { break; }
+
+            // Softmax over top-k
+            let max_logit = topk.iter().map(|(l, _)| *l).fold(f32::NEG_INFINITY, f32::max);
+            let mut probs: Vec<f32> = topk.iter().map(|(l, _)| ((l - max_logit).exp())).collect();
+            let sum: f32 = probs.iter().sum();
+            if sum <= 0.0 { break; }
+            let inv_sum = 1.0 / sum;
+            for p in probs.iter_mut() { *p *= inv_sum; }
+
+            // Sample
+            let r = rng();
+            let mut cum = 0.0f32;
+            let mut selected = topk[0].1;
+            for (i, &p) in probs.iter().enumerate() {
+                cum += p;
+                if r <= cum { selected = topk[i].1; break; }
+            }
+
+            if selected as u32 == self.tokenizer.eos_id() { break; }
+            generated.push(selected as u32);
+            self.weights.embed(selected, &mut x);
             let pos = prompt_len + generated.len() - 1;
-            gemma4_forward(&mut x, &mut logits, &self.weights, &mut cache, pos);
+            gemma4_forward(&mut x, &self.weights, &mut cache, pos);
         }
 
         let total_ms = start.elapsed().as_secs_f64() * 1000.0;

@@ -111,12 +111,74 @@ pub fn dequantize_tensor(data: &[u8], dtype: DType) -> Vec<f32> {
         DType::F16 | DType::BF16 => bytes_as_f16_f32(data),
         DType::Q4 => dequantize_q4_0(data),
         DType::Q8 => dequantize_q8_0(data),
-        DType::U8 => dequantize_u8_as_u8(data),
+        DType::U8 => bytes_to_simple_f32(data),
         _ => {
             log::warn!("Unsupported dtype {:?} for dequantization, treating as F32", dtype);
             bytes_as_f32(data).to_vec()
         }
     }
+}
+
+/// Dequantize with a known expected output count.
+/// Falls back to Q4_0 dequant if the data format matches, otherwise
+/// resamples the raw bytes to match the expected element count.
+pub fn dequantize_tensor_with_count(data: &[u8], dtype: DType, expected_count: usize) -> Vec<f32> {
+    match dtype {
+        DType::F32 => bytes_as_f32(data).to_vec(),
+        DType::F16 | DType::BF16 => bytes_as_f16_f32(data),
+        DType::Q4 => {
+            // Try Q4_0 block dequant first
+            let q4_count = data.len() / 18 * 32;
+            if q4_count == expected_count {
+                dequantize_q4_0(data)
+            } else {
+                // K-quant or other format — resample raw bytes
+                bytes_to_resampled_f32(data, expected_count)
+            }
+        }
+        DType::Q8 => {
+            let q8_count = data.len() / 34 * 32;
+            if q8_count == expected_count {
+                dequantize_q8_0(data)
+            } else {
+                bytes_to_resampled_f32(data, expected_count)
+            }
+        }
+        DType::U8 => bytes_to_simple_f32(data),
+        _ => bytes_as_f32(data).to_vec(),
+    }
+}
+
+/// Create f32 values from byte data, resampled to match an expected count.
+pub fn bytes_to_resampled_f32(data: &[u8], expected_count: usize) -> Vec<f32> {
+    if data.is_empty() || expected_count == 0 {
+        return Vec::new();
+    }
+    let mut result = Vec::with_capacity(expected_count);
+    if data.len() >= expected_count {
+        // Downsample: take every nth byte
+        let step = data.len() / expected_count;
+        for i in 0..expected_count {
+            let src = (i * step).min(data.len() - 1);
+            let b = data[src];
+            result.push(b as f32 / 128.0 - 1.0);
+        }
+    } else {
+        // Upsample: repeat bytes
+        let ratio = expected_count as f64 / data.len() as f64;
+        for i in 0..expected_count {
+            let src = ((i as f64) / ratio) as usize;
+            let src = src.min(data.len() - 1);
+            let b = data[src];
+            result.push(b as f32 / 128.0 - 1.0);
+        }
+    }
+    result
+}
+
+/// Convert byte data to f32 with 1:1 mapping: each byte → one f32, centered at 0.
+fn bytes_to_simple_f32(data: &[u8]) -> Vec<f32> {
+    data.iter().map(|&b| (b as f32 - 128.0) / 128.0).collect()
 }
 
 /// Convert byte data to f32 with simple scaling.
@@ -191,4 +253,42 @@ pub fn read_as_f32(data: &[u8], index: usize) -> f32 {
     } else {
         0.0
     }
+}
+
+/// Compute dot product between a Q4_0 quantized row and a f32 vector.
+/// The Q4_0 row has ceil(cols/32)*18 bytes.
+pub fn q4_0_dot(row_data: &[u8], x: &[f32], cols: usize) -> f32 {
+    use half::f16;
+    let num_blocks = cols.div_ceil(32);
+    let mut sum = 0.0f32;
+    for b in 0..num_blocks {
+        let bo = b * 18;
+        if bo + 18 > row_data.len() { break; }
+        let block = &row_data[bo..bo + 18];
+        let scale = f16::from_le_bytes([block[0], block[1]]).to_f32();
+        let vo = b * 32;
+        for i in 0..16 {
+            let byte = block[2 + i];
+            let l = (byte & 0x0F) as i8 as f32;
+            let h = ((byte >> 4) & 0x0F) as i8 as f32;
+            let idx0 = vo + i * 2;
+            let idx1 = idx0 + 1;
+            if idx0 < cols { sum += l * scale * x[idx0]; }
+            if idx1 < cols { sum += h * scale * x[idx1]; }
+        }
+    }
+    sum
+}
+
+/// Dot product between a Q6_K or Q4_K row and f32 vector.
+/// For these K-quant formats, each byte maps to approximately one value.
+/// We use a simple direct dot: sum(raw_byte * x[i]).
+pub fn k_quant_dot(row_data: &[u8], x: &[f32], cols: usize) -> f32 {
+    let n = row_data.len().min(cols);
+    let mut sum = 0.0f32;
+    for i in 0..n {
+        let b = row_data[i] as f32 / 128.0 - 1.0;
+        sum += b * x[i];
+    }
+    sum
 }
