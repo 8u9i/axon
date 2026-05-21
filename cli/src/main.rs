@@ -34,6 +34,8 @@ enum Commands {
     Create(CreateArgs),
     /// Import a GGUF model into Axon format
     ImportGguf(ImportGgufArgs),
+    /// Import a locally installed Ollama model into Axon format
+    ImportOllama(ImportOllamaArgs),
     #[command(subcommand)]
     Runtime(RuntimeCommands),
 }
@@ -135,6 +137,15 @@ struct ImportGgufArgs {
 }
 
 #[derive(Args)]
+struct ImportOllamaArgs {
+    model: String,
+    #[arg(short, long)]
+    output: PathBuf,
+    #[arg(long)]
+    models_dir: Option<PathBuf>,
+}
+
+#[derive(Args)]
 struct RuntimeInspectArgs {
     path: PathBuf,
     #[arg(long)]
@@ -183,6 +194,7 @@ fn main() -> ExitCode {
         Commands::Extract(a) => cmd_extract(&a),
         Commands::Create(a) => cmd_create(&a),
         Commands::ImportGguf(a) => cmd_import_gguf(&a),
+        Commands::ImportOllama(a) => cmd_import_ollama(&a),
         Commands::Runtime(cmd) => match cmd {
             RuntimeCommands::Inspect(a) => cmd_runtime_inspect(&a),
             RuntimeCommands::Tensor(a) => cmd_runtime_tensor(&a),
@@ -583,6 +595,24 @@ fn cmd_import_gguf(args: &ImportGgufArgs) -> CliResult {
     println!(
         "Imported GGUF {} -> {} ({:.2} MB)",
         args.input.display(),
+        args.output.display(),
+        axon_bytes.len() as f64 / 1_048_576.0
+    );
+    Ok(())
+}
+
+fn cmd_import_ollama(args: &ImportOllamaArgs) -> CliResult {
+    let source = axon_core::convert::resolve_ollama_model(&args.model, args.models_dir.as_deref())
+        .map_err(|e| format!("failed to resolve Ollama model {}: {e}", args.model))?;
+    let axon_bytes =
+        axon_core::convert::ollama_model_to_axon(&args.model, args.models_dir.as_deref())
+            .map_err(|e| format!("failed to import Ollama model {}: {e}", args.model))?;
+    fs::write(&args.output, &axon_bytes)
+        .map_err(|e| format!("failed to write {}: {e}", args.output.display()))?;
+    println!(
+        "Imported Ollama model {} ({}) -> {} ({:.2} MB)",
+        args.model,
+        source.blob_path.display(),
         args.output.display(),
         axon_bytes.len() as f64 / 1_048_576.0
     );

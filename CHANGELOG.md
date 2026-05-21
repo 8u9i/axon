@@ -11,6 +11,8 @@ file header and documented in `docs/format-versioning.md`.
 ### Added
 
 - GGUF v2/v3 import command: `axon import-gguf <model.gguf> --output <model.axon>`.
+- Ollama local model import command:
+  `axon import-ollama <model:tag> --output <model.axon>`.
 - CLI integration tests for pack, validate, list, inspect, extract, unpack,
   convert, runtime inspect, runtime tensor, and runtime slice.
 - Format versioning and compatibility policy.

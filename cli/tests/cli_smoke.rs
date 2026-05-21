@@ -114,6 +114,40 @@ fn write_tiny_gguf(path: &Path) {
     fs::write(path, bytes).expect("write tiny gguf");
 }
 
+fn write_fake_ollama_model_store(root: &Path, model_ref: &str) -> PathBuf {
+    let (model, tag) = model_ref.rsplit_once(':').unwrap_or((model_ref, "latest"));
+    let digest = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    let manifest_dir = root
+        .join("manifests")
+        .join("registry.ollama.ai")
+        .join("library")
+        .join(model);
+    let blob_dir = root.join("blobs");
+    fs::create_dir_all(&manifest_dir).expect("create manifest dir");
+    fs::create_dir_all(&blob_dir).expect("create blob dir");
+
+    let blob_path = blob_dir.join(format!("sha256-{digest}"));
+    write_tiny_gguf(&blob_path);
+
+    let manifest = serde_json::json!({
+        "schemaVersion": 2,
+        "mediaType": "application/vnd.docker.distribution.manifest.v2+json",
+        "layers": [
+            {
+                "mediaType": "application/vnd.ollama.image.model",
+                "digest": format!("sha256:{digest}"),
+                "size": fs::metadata(&blob_path).expect("blob metadata").len()
+            }
+        ]
+    });
+    fs::write(
+        manifest_dir.join(tag),
+        serde_json::to_vec(&manifest).expect("serialize manifest"),
+    )
+    .expect("write manifest");
+    blob_path
+}
+
 #[test]
 fn pack_validate_list_extract_and_runtime_inspect() {
     let dir = test_workspace("happy_path");
@@ -309,6 +343,38 @@ fn import_tiny_gguf_then_inspect_with_axon() {
         run(&["runtime", "tensor", &path_string(&axon), "matrix"]),
         "runtime tensor imported gguf",
     );
+
+    fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn import_ollama_model_store_then_inspect_with_axon() {
+    let dir = test_workspace("ollama_import");
+    let store = dir.join("ollama-models");
+    let axon = dir.join("gemma.axon");
+    let blob = write_fake_ollama_model_store(&store, "gemma3:1b");
+
+    assert_success(
+        run(&[
+            "import-ollama",
+            "gemma3:1b",
+            "--models-dir",
+            &path_string(&store),
+            "--output",
+            &path_string(&axon),
+        ]),
+        "import-ollama",
+    );
+
+    assert_success(
+        run(&["inspect", &path_string(&axon)]),
+        "inspect ollama import",
+    );
+    assert_success(
+        run(&["runtime", "tensor", &path_string(&axon), "matrix"]),
+        "runtime tensor ollama import",
+    );
+    assert!(blob.exists());
 
     fs::remove_dir_all(&dir).ok();
 }

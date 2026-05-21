@@ -6,9 +6,10 @@
 //! - **Raw tensor I/O**: write individual weight blobs to disk
 
 use std::collections::HashMap;
+use std::env;
 use std::fs;
 use std::io::{Cursor, Read};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::error::{AxonError, AxonResult};
 use crate::manifest::AxonFile;
@@ -48,6 +49,14 @@ pub struct GgufTensorEntry {
     pub shape: Vec<u64>,
     pub data_offset: u64,
     pub data_size: u64,
+}
+
+#[derive(Debug, Clone)]
+pub struct OllamaModelSource {
+    pub manifest_path: PathBuf,
+    pub blob_path: PathBuf,
+    pub model_ref: String,
+    pub digest: String,
 }
 
 /// Parse a .safetensors header from raw bytes.
@@ -287,13 +296,22 @@ pub fn parse_gguf_header(data: &[u8]) -> AxonResult<GgufHeader> {
 
 /// Convert a GGUF file into Axon format in memory.
 pub fn gguf_to_axon(path: &Path) -> AxonResult<Vec<u8>> {
+    gguf_to_axon_with_metadata(path, HashMap::new())
+}
+
+fn gguf_to_axon_with_metadata(
+    path: &Path,
+    extra_metadata: HashMap<String, serde_json::Value>,
+) -> AxonResult<Vec<u8>> {
     let data = fs::read(path)?;
     let header = parse_gguf_header(&data)?;
 
     let model = header
         .metadata
-        .get("general.name")
+        .get("ollama.model")
         .and_then(|v| v.as_str())
+        .or_else(|| extra_metadata.get("ollama.model").and_then(|v| v.as_str()))
+        .or_else(|| header.metadata.get("general.name").and_then(|v| v.as_str()))
         .or_else(|| path.file_stem().and_then(|s| s.to_str()))
         .unwrap_or("gguf-model");
     let architecture = header
@@ -309,6 +327,10 @@ pub fn gguf_to_axon(path: &Path) -> AxonResult<Vec<u8>> {
         .metadata("gguf.version", serde_json::json!(header.version))
         .metadata("gguf.tensor_count", serde_json::json!(header.tensor_count))
         .metadata("gguf.metadata", serde_json::json!(header.metadata));
+
+    for (key, value) in extra_metadata {
+        builder = builder.metadata(&key, value);
+    }
 
     for entry in &header.tensors {
         let start = entry.data_offset as usize;
@@ -333,6 +355,120 @@ pub fn gguf_to_axon(path: &Path) -> AxonResult<Vec<u8>> {
     }
 
     builder.build()
+}
+
+/// Resolve an Ollama model reference to the local model GGUF blob.
+///
+/// This reads Ollama's on-disk manifest store directly and does not require the
+/// Ollama server to be running. Model references follow Ollama's common forms,
+/// such as `gemma3:1b`, `qwen2.5:3b`, or `library/gemma3:1b`.
+pub fn resolve_ollama_model(
+    model_ref: &str,
+    models_dir: Option<&Path>,
+) -> AxonResult<OllamaModelSource> {
+    let models_dir = models_dir
+        .map(Path::to_path_buf)
+        .unwrap_or_else(default_ollama_models_dir);
+    let (registry, namespace, model, tag) = parse_ollama_ref(model_ref);
+    let manifest_path = models_dir
+        .join("manifests")
+        .join(registry)
+        .join(namespace)
+        .join(model)
+        .join(tag);
+
+    let manifest_bytes = fs::read(&manifest_path).map_err(|e| {
+        AxonError::InvalidManifest(format!(
+            "failed to read Ollama manifest {}: {e}",
+            manifest_path.display()
+        ))
+    })?;
+    let manifest: serde_json::Value = serde_json::from_slice(&manifest_bytes)
+        .map_err(|e| AxonError::InvalidManifest(format!("Ollama manifest JSON: {e}")))?;
+
+    let model_layer = manifest
+        .get("layers")
+        .and_then(|v| v.as_array())
+        .and_then(|layers| {
+            layers.iter().find(|layer| {
+                layer
+                    .get("mediaType")
+                    .and_then(|v| v.as_str())
+                    .is_some_and(|media_type| media_type == "application/vnd.ollama.image.model")
+            })
+        })
+        .ok_or_else(|| {
+            AxonError::InvalidManifest(format!(
+                "Ollama manifest {} does not contain a local model layer",
+                manifest_path.display()
+            ))
+        })?;
+    let digest = model_layer
+        .get("digest")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| AxonError::InvalidManifest("Ollama model layer missing digest".into()))?
+        .to_string();
+    let digest_hash = digest.strip_prefix("sha256:").unwrap_or(&digest);
+    let blob_path = models_dir
+        .join("blobs")
+        .join(format!("sha256-{digest_hash}"));
+    if !blob_path.exists() {
+        return Err(AxonError::InvalidManifest(format!(
+            "Ollama model blob is missing: {}",
+            blob_path.display()
+        )));
+    }
+
+    Ok(OllamaModelSource {
+        manifest_path,
+        blob_path,
+        model_ref: model_ref.to_string(),
+        digest,
+    })
+}
+
+/// Import an Ollama-managed GGUF model into Axon format.
+pub fn ollama_model_to_axon(model_ref: &str, models_dir: Option<&Path>) -> AxonResult<Vec<u8>> {
+    let source = resolve_ollama_model(model_ref, models_dir)?;
+    let mut metadata = HashMap::new();
+    metadata.insert("source_format".to_string(), serde_json::json!("ollama"));
+    metadata.insert(
+        "ollama.model".to_string(),
+        serde_json::json!(source.model_ref),
+    );
+    metadata.insert(
+        "ollama.digest".to_string(),
+        serde_json::json!(source.digest),
+    );
+    metadata.insert(
+        "ollama.manifest_path".to_string(),
+        serde_json::json!(source.manifest_path.display().to_string()),
+    );
+    gguf_to_axon_with_metadata(&source.blob_path, metadata)
+}
+
+fn default_ollama_models_dir() -> PathBuf {
+    if let Some(path) = env::var_os("OLLAMA_MODELS") {
+        return PathBuf::from(path);
+    }
+    if let Some(path) = env::var_os("USERPROFILE") {
+        return PathBuf::from(path).join(".ollama").join("models");
+    }
+    if let Some(path) = env::var_os("HOME") {
+        return PathBuf::from(path).join(".ollama").join("models");
+    }
+    PathBuf::from(".ollama").join("models")
+}
+
+fn parse_ollama_ref(model_ref: &str) -> (&str, &str, &str, &str) {
+    let (name_part, tag) = model_ref.rsplit_once(':').unwrap_or((model_ref, "latest"));
+    let parts = name_part.split('/').collect::<Vec<_>>();
+    match parts.as_slice() {
+        [model] => ("registry.ollama.ai", "library", *model, tag),
+        [namespace, model] => ("registry.ollama.ai", *namespace, *model, tag),
+        [registry, namespace, model] => (*registry, *namespace, *model, tag),
+        _ => ("registry.ollama.ai", "library", name_part, tag),
+    }
 }
 
 fn read_u32(cursor: &mut Cursor<&[u8]>) -> AxonResult<u32> {

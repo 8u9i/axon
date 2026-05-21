@@ -205,6 +205,7 @@ axon pack        Pack tensors from a manifest and data directory
 axon convert     Export manifest as JSON
 axon bench       Benchmark load/index performance
 axon import-gguf Import a GGUF model into .axon format
+axon import-ollama Import a locally installed Ollama model into .axon format
 axon runtime     Runtime subcommands: inspect, tensor, slice, stats, bench
 ```
 
@@ -218,6 +219,15 @@ their tensor bytes with Axon tooling:
 axon import-gguf model.gguf --output model.axon
 axon inspect model.axon
 axon runtime tensor model.axon token_embd.weight
+```
+
+If Ollama already has the model installed, Axon can read Ollama's local
+manifest/blob store directly without starting the Ollama server:
+
+```bash
+axon import-ollama gemma3:1b --output gemma3-1b.axon
+axon inspect gemma3-1b.axon
+axon validate gemma3-1b.axon
 ```
 
 This importer preserves GGUF tensor byte ranges and metadata for Axon workflows.
