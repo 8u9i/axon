@@ -4,6 +4,10 @@
 </h1>
 
 <p align="center">
+  <img src="assets/axon-diagram.jpeg" alt="Axon Architecture Diagram" width="800">
+</p>
+
+<p align="center">
   <strong>A runtime-first model weight container for memory-limited inference.</strong><br>
   Instant loading · Memory-mapped tensor access · SSD-backed execution · LoRA side-loading<br>
   Mixed precision · 64-byte aligned · XXH3 checksums · SafeTensors import
