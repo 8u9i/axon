@@ -4,166 +4,140 @@
 </h1>
 
 <p align="center">
-  <strong>A binary-first, hardware-aligned container format for ML model weights.</strong><br>
-  Zero-copy loading · Mixed precision · 64-byte aligned · XXH3 checksums<br>
-  SafeTensors import · PyTorch integration · C FFI · Python bindings
+  <strong>A runtime-first model weight container for memory-limited inference.</strong><br>
+  Instant loading · Memory-mapped tensor access · SSD-backed execution · LoRA side-loading<br>
+  Mixed precision · 64-byte aligned · XXH3 checksums · SafeTensors import
 </p>
 
 <p align="center">
-  <a href="https://github.com/8u9i/axon/actions"><img src="https://github.com/8u9i/axon/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <a href="LICENSE-APACHE"><img src="https://img.shields.io/badge/license-Apache_2.0-blue.svg" alt="Apache 2.0"></a>
   <a href="LICENSE-MIT"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="MIT"></a>
-  <a href="https://crates.io/crates/axon-core"><img src="https://img.shields.io/crates/v/axon-core" alt="crates.io"></a>
-  <a href="https://pypi.org/project/axon-format"><img src="https://img.shields.io/pypi/v/axon-format" alt="PyPI"></a>
+  <a href="LICENSE-APACHE"><img src="https://img.shields.io/badge/license-Apache_2.0-blue.svg" alt="Apache 2.0"></a>
 </p>
 
 ---
 
-**.axon** is a zero-copy, memory-mappable format for storing neural network weights — designed to replace JSON and SafeTensors for high-performance ML inference.
+**.axon** is a binary model-weight container and runtime loader for AI models. It helps
+memory-limited machines — laptops, edge devices, home AI servers — load and run large
+models more efficiently by using memory mapping, partial tensor loading, and
+SSD-backed caching.
 
-Instead of parsing text or copying bytes through multiple buffers, .axon files are designed to function as memory itself: the file format is the in-memory layout. Load time is measured in microseconds per tensor, not seconds.
+## What Axon Does
 
-## Key Properties
+- **Fast model opening** — parse header + manifest + tensor index in ~30µs, regardless
+  of file size
+- **Memory-mapped tensor access** — tensor bytes are faulted in from disk on demand,
+  not eagerly loaded
+- **Partial tensor loading** — load only the rows or byte range you need
+- **SSD-backed execution** — keep model weights on SSD, cache only active tensors in RAM
+- **LoRA adapter side-loading** — fast adapter switching without loading full models
+- **Tensor cache management** — LRU eviction, pinning, memory budget control
+- **Sharded model support** — models split across multiple files
 
-| Property | .axon | .json | .safetensors |
-|---|---|---|---|
-| Parse method | mmap (zero-copy) | Text parsing | Binary header |
-| 1GB load time | ~1ms | ~60s | ~2s |
-| Mixed precision | Per-tensor | No | No |
-| Hardware alignment | 64-byte cache line | None | None |
-| Checksums | XXH3 per tensor | None | Yes |
-| LoRA patches | Side-loading | No | No |
-| C FFI | Built-in | N/A | N/A |
-| Multi-GPU sharding | Flags | Manual | Manual |
+## What Axon Is Not
+
+Axon is **not** a training accelerator. Training speed depends on GPU compute, memory
+bandwidth, optimizer operations, and matrix multiplication. Axon focuses on the
+**storage and loading side** of model execution:
+
+- Faster startup
+- Lower memory overhead
+- Partial tensor access
+- SSD-backed model execution
+- LoRA adapter switching
+- Large-model usage on memory-limited machines
 
 ## Quick Start
 
 ```bash
 # Install via Rust
-cargo install axon-cli
+cargo build --release
 
-# Create a 1.1GB test model with 17 tensors (mixed FP16 + INT4)
-axon create --model "MyModel-7B" --architecture llama model.axon
+# Create a test model with 17 tensors
+./target/release/axon create --model "MyModel-7B" --architecture llama model.axon
 
 # Inspect it
-axon inspect model.axon
+./target/release/axon inspect model.axon
 
-# Validate checksums (17/17 pass)
-axon validate model.axon
+# Open with the runtime (zero-copy mmap, no tensor data loaded)
+./target/release/axon runtime open model.axon
+```
 
-# Extract a single tensor
-axon extract model.axon --name layer_0_q --output attention_q.bin
+```rust
+use axon_runtime::AxonRuntime;
 
-# Load in Python
-python3 -c "
-import axon
-m = axon.load('model.axon')
-print(m.summary())
-weights = m['layer_0_q']
-print(f'{len(weights)} bytes')
-"
+let rt = AxonRuntime::open("model.axon")?;
+println!("Model: {} ({} tensors)", rt.model_name(), rt.tensor_count());
+
+// Tensor data is loaded lazily from the mmap — only the bytes you
+// touch are faulted in from disk
+let data = rt.tensor("emb_weight")?;
 ```
 
 ## Performance
 
-Benchmarked on a 1.14GB .axon file with 17 tensors (Ryzen 7950X, PCIe 4.0 NVMe):
+Benchmarked on a ~100MB synthetic model (100 tensors, 1MB each):
 
-| Operation | Time | Notes |
+| Operation | Time |
+|---|---|
+| Open (parse metadata) | **~29µs** |
+| First tensor access | **~183ns** (offset math, OS handles page faults) |
+| Sequential access (100 tensors) | **~498µs** |
+| Partial load (4KB of 1MB tensor) | **~1.15µs** |
+| Full load (1MB tensor) | **~144µs** |
+
+**Key insight:** The runtime does not load tensor data during `open()`. Only the
+header (64 bytes), manifest (a few KB), and tensor descriptors (192 bytes each) are
+parsed. Individual tensor bytes are faulted in from disk by the OS on first access.
+
+## Runtime Architecture
+
+Axon has two layers:
+
+| Crate | Purpose | Memory model |
 |---|---|---|
-| Load + parse entire file | **1.07s** | Reading from NVMe + validating all structures |
-| Index any tensor by name | **~1.2µs** | Offset arithmetic, no string traversal |
-| Checksums (17 tensors) | **<1ms** | XXH3, hardware-accelerated |
-| Memory-map + first tensor | **~1ms** | Zero-copy, no parsing needed |
+| `core/` | Format library: parse, write, validate, convert | Loads into `Vec<u8>` (safe, simple) |
+| `runtime/` | Execution layer: mmap, cache, partial load, LoRA | Borrows from mmap (zero-copy, lazy) |
 
-## Installation
+The runtime is the recommended path for inference. The core format library is the
+stable base used by the CLI, FFI, and Python bindings.
 
-### From source (Rust)
-
-```bash
-git clone https://github.com/8u9i/axon.git
-cd axon
-cargo build --release
-# CLI: ./target/release/axon
-# FFI: ./target/release/libaxon_ffi.so
-```
-
-### Python
-
-```bash
-pip install axon-format
-# Or with torch support:
-pip install "axon-format[torch]"
-
-python3 -c "import axon; print(axon.__version__)"
-```
-
-## Python with PyTorch
-
-```python
-import axon.torch
-
-# Save any state_dict as .axon
-model = torch.nn.Linear(4096, 4096)
-axon.torch.save(model.state_dict(), "model.axon")
-
-# Load from .axon — returns (state_dict, metadata)
-state_dict, metadata = axon.torch.load("model.axon")
-model.load_state_dict(state_dict)
-print(f"Model: {metadata['model']}")
-```
-
-## CLI Reference
-
-```
-axon create     Create a synthetic .axon file for testing
-axon inspect    Show file structure and tensor list (--hex for hex dump)
-axon validate   Verify structure and checksums
-axon list       List all tensors (--verbose for sizes)
-axon extract    Extract a single tensor by name
-axon unpack     Extract all tensors to .npy or .bin files
-axon pack       Pack tensors from a manifest + data directory
-axon convert    Export manifest as JSON
-axon bench      Benchmark load/index performance
-```
-
-## C FFI
-
-```c
-#include "axon.h"
-
-AxonHandle* h = axon_open("model.axon");
-uint64_t count = axon_tensor_count(h);
-
-char name[64];
-uint32_t dtype, rank;
-uint64_t shape[8], offset, size;
-axon_tensor_info(h, 0, name, 64, &dtype, &rank, shape, &offset, &size);
-
-// Zero-copy data access
-uint64_t data_size;
-const float* w = (const float*)axon_tensor_data(h, 0, &data_size);
-
-axon_close(h);
-```
-
-Compile: `gcc -o example example.c -I/path/to/include -laxon_ffi`
+See **[docs/runtime-architecture.md](docs/runtime-architecture.md)** for the full design.
 
 ## Project Structure
 
 ```
 axon/
 ├── core/              # Core format library (Rust)
+├── runtime/           # SSD-backed lazy runtime (Rust)
 ├── cli/               # Command-line tool
 ├── ffi/               # C FFI shared library
 ├── python/            # Python package (ctypes + pure-Python fallback)
 ├── include/           # C header (axon.h)
-├── docs/              # Spec and usage docs
-└── tests/             # Integration tests
+├── docs/              # Spec and architecture docs
+├── tests/             # Integration tests
+└── examples/          # Usage examples
 ```
 
-## Specification
+## CLI Reference
 
-See **[docs/spec.md](docs/spec.md)** for the complete binary specification.
+```
+axon create      Create a synthetic .axon file for testing
+axon inspect     Show file structure and tensor list
+axon validate    Verify structure and checksums
+axon list        List all tensors
+axon extract     Extract a single tensor by name
+axon unpack      Extract all tensors to .npy or .bin files
+axon pack        Pack tensors from a manifest + data directory
+axon convert     Export manifest as JSON
+axon bench       Benchmark load/index performance
+axon runtime     Runtime subcommands (open, tensor, stats)
+```
+
+## Documentation
+
+- **[docs/spec.md](docs/spec.md)** — Binary format specification
+- **[docs/runtime-architecture.md](docs/runtime-architecture.md)** — Runtime design
+- **[docs/usage.md](docs/usage.md)** — CLI, Python, and C FFI usage
 
 ## License
 

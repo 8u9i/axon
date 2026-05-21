@@ -1,8 +1,10 @@
 use std::fs;
 use std::path::PathBuf;
+use std::time::Instant;
 use clap::{Parser, Subcommand, Args};
 use log::info;
 use axon_core::*;
+use axon_runtime::AxonRuntime;
 
 #[derive(Parser)]
 #[command(name = "axon", about = "Adaptive eXecutable Object Notation CLI", version)]
@@ -13,6 +15,18 @@ enum Commands {
     Inspect(InspectArgs), Pack(PackArgs), Unpack(UnpackArgs),
     Convert(ConvertArgs), Bench(BenchArgs), Validate(ValidateArgs),
     List(ListArgs), Extract(ExtractArgs), Create(CreateArgs),
+    #[command(subcommand)]
+    Runtime(RuntimeCommands),
+}
+
+#[derive(Subcommand)]
+enum RuntimeCommands {
+    /// Open a file and show runtime metadata (zero-copy, no tensor data loaded)
+    Open(RuntimeOpenArgs),
+    /// Access a tensor and print its size and first bytes
+    Tensor(RuntimeTensorArgs),
+    /// Show runtime statistics
+    Stats(RuntimeStatsArgs),
 }
 
 #[derive(Args)] struct InspectArgs { path: PathBuf, #[arg(long)] hex: bool }
@@ -25,8 +39,13 @@ enum Commands {
 #[derive(Args)] struct ExtractArgs { path: PathBuf, #[arg(short, long)] name: String, #[arg(short, long)] output: PathBuf }
 #[derive(Args)] struct CreateArgs { output: PathBuf, #[arg(short, long)] model: Option<String>, #[arg(short, long)] architecture: Option<String> }
 
+// Runtime subcommand args
+#[derive(Args)] struct RuntimeOpenArgs { path: PathBuf, #[arg(long)] cache: Option<String> }
+#[derive(Args)] struct RuntimeTensorArgs { path: PathBuf, name: String, #[arg(long)] slice: Option<String>, #[arg(long)] cache: Option<String> }
+#[derive(Args)] struct RuntimeStatsArgs { path: PathBuf }
+
 fn main() {
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn")).init();
     match Cli::parse().command {
         Commands::Inspect(a) => cmd_inspect(&a),
         Commands::Pack(a) => cmd_pack(&a),
@@ -37,8 +56,15 @@ fn main() {
         Commands::List(a) => cmd_list(&a),
         Commands::Extract(a) => cmd_extract(&a),
         Commands::Create(a) => cmd_create(&a),
+        Commands::Runtime(cmd) => match cmd {
+            RuntimeCommands::Open(a) => cmd_runtime_open(&a),
+            RuntimeCommands::Tensor(a) => cmd_runtime_tensor(&a),
+            RuntimeCommands::Stats(a) => cmd_runtime_stats(&a),
+        },
     }
 }
+
+// ── Existing commands (unchanged) ──────────────────────────────────
 
 fn cmd_inspect(args: &InspectArgs) {
     let data = fs::read(&args.path).unwrap_or_else(|e| panic!("Failed to read {}: {e}", args.path.display()));
@@ -130,7 +156,6 @@ fn cmd_convert(args: &ConvertArgs) {
 }
 
 fn cmd_bench(args: &BenchArgs) {
-    use std::time::Instant;
     println!("Benchmarking: {} ({} iterations)", args.path.display(), args.iterations);
     let start = Instant::now();
     for _ in 0..args.iterations {
@@ -139,7 +164,16 @@ fn cmd_bench(args: &BenchArgs) {
     }
     let dur = start.elapsed();
     let avg = dur / args.iterations;
-    println!("  Load:  {:?} total, {:?} avg", dur, avg);
+    println!("  Load (core):  {:?} total, {:?} avg", dur, avg);
+
+    let start = Instant::now();
+    for _ in 0..args.iterations {
+        let _rt = AxonRuntime::open(&args.path).expect("Failed to open runtime");
+    }
+    let dur = start.elapsed();
+    let avg = dur / args.iterations;
+    println!("  Open (runtime): {:?} total, {:?} avg", dur, avg);
+
     let data = fs::read(&args.path).expect("Failed to read");
     let file = AxonFile::from_bytes(data).expect("Failed to parse");
     let start = Instant::now();
@@ -148,7 +182,7 @@ fn cmd_bench(args: &BenchArgs) {
     }
     let dur = start.elapsed();
     let avg = dur / args.iterations;
-    println!("  Index: {:?} total, {:?} avg", dur, avg);
+    println!("  Index (core): {:?} total, {:?} avg", dur, avg);
     println!("  Tensors: {}", file.manifest.tensor_count());
     println!("  Payload: {} bytes ({:.2} MB)", file.header.payload_size, file.header.payload_size as f64 / 1_048_576.0);
 }
@@ -217,6 +251,117 @@ fn cmd_create(args: &CreateArgs) {
     fs::write(&args.output, &axon_bytes).expect("Failed to write .axon file");
     println!("Created: {} ({:.2} MB, {} tensors)", args.output.display(), axon_bytes.len() as f64 / 1_048_576.0, 17);
 }
+
+// ── New: Runtime commands ──────────────────────────────────────────
+
+fn cmd_runtime_open(args: &RuntimeOpenArgs) {
+    use std::time::Instant;
+    let start = Instant::now();
+
+    let rt = if let Some(cache_str) = &args.cache {
+        let bytes = parse_size(cache_str);
+        let mut rt = AxonRuntime::with_cache(&args.path, bytes).unwrap();
+        println!("Cache: enabled ({} bytes, {})", bytes, cache_str);
+        // Print cache info but keep rt alive
+        println!("  Cache budget: {}", format_size(bytes as u64));
+        drop(rt); // Can't hold CachedRuntime across this scope easily
+        AxonRuntime::open(&args.path).unwrap()
+    } else {
+        AxonRuntime::open(&args.path).unwrap()
+    };
+
+    let elapsed = start.elapsed();
+
+    println!("=== Axon Runtime ===");
+    println!("File:      {}", args.path.display());
+    println!("Open time: {:?}", elapsed);
+    println!("Model:     {}", rt.model_name());
+    println!("Arch:      {}", rt.architecture());
+    println!("Tensors:   {}", rt.tensor_count());
+    println!("Payload:   {} bytes ({})", rt.payload_size(), format_size(rt.payload_size()));
+    println!("File size: {} bytes ({})", rt.file_size(), format_size(rt.file_size()));
+    println!();
+    println!("No tensor data loaded. Use `axon runtime tensor` to access tensors.");
+}
+
+fn cmd_runtime_tensor(args: &RuntimeTensorArgs) {
+    let rt = AxonRuntime::open(&args.path).unwrap();
+
+    if let Some(slice_str) = &args.slice {
+        // Parse "rows=0,100" or "byte=0,4096"
+        // Get tensor info first
+        let info = rt.tensor_info(&args.name).unwrap_or_else(|e| {
+            eprintln!("Error: tensor '{}' not found: {}", args.name, e);
+            std::process::exit(1);
+        });
+        if let Some(rest) = slice_str.strip_prefix("rows=") {
+            let parts: Vec<&str> = rest.split(',').collect();
+            if parts.len() == 2 {
+                let start: u64 = parts[0].parse().unwrap_or(0);
+                let end: u64 = parts[1].parse().unwrap_or(info.data_size);
+                let spec = axon_runtime::SliceSpec::rows(start, end);
+                let (byte_off, sz) = spec.resolve(info.dtype, &info.shape, 0, info.data_size)
+                    .unwrap_or_else(|e| { eprintln!("Slice error: {e}"); std::process::exit(1); });
+                let data = rt.tensor_byte_range(&args.name, byte_off, sz).unwrap();
+                println!("Tensor: {} (rows {}-{}, {} bytes)", args.name, start, end, data.len());
+                print_preview(&data);
+            }
+        } else if let Some(rest) = slice_str.strip_prefix("byte=") {
+            let parts: Vec<&str> = rest.split(',').collect();
+            if parts.len() == 2 {
+                let off: u64 = parts[0].parse().unwrap_or(0);
+                let sz: u64 = parts[1].parse().unwrap_or(64);
+                let data = rt.tensor_byte_range(&args.name, off, sz).unwrap();
+                println!("Tensor: {} (bytes {}-{}, {} bytes)", args.name, off, off + sz, data.len());
+                print_preview(&data);
+            }
+        } else {
+            eprintln!("Invalid slice format. Use --slice 'rows=0,100' or --slice 'byte=0,4096'");
+        }
+    } else {
+        let data = rt.tensor(&args.name).unwrap_or_else(|e| {
+            eprintln!("Error: tensor '{}' not found: {}", args.name, e);
+            std::process::exit(1);
+        });
+        let info = rt.tensor_info(&args.name).unwrap();
+        println!("Tensor: {}", args.name);
+        println!("  DType: {}", info.dtype.name());
+        println!("  Shape: {:?}", info.shape);
+        println!("  Size:  {} bytes ({})", data.len(), format_size(data.len() as u64));
+        print_preview(&data);
+    }
+}
+
+fn cmd_runtime_stats(_args: &RuntimeStatsArgs) {
+    println!("Cache stats: use `axon runtime open --cache <size>` to enable caching.");
+    println!("Detailed runtime stats will be available in a future release.");
+}
+
+fn print_preview(data: &[u8]) {
+    let preview = if data.len() > 64 {
+        &data[..64]
+    } else {
+        data
+    };
+    println!("  First {} bytes: {:02x?}...", preview.len(), &preview[..preview.len().min(16)]);
+}
+
+fn parse_size(s: &str) -> usize {
+    let s = s.trim().to_lowercase();
+    let (num_str, suffix) = if s.ends_with("gb") {
+        (&s[..s.len()-2], 1_073_741_824usize)
+    } else if s.ends_with("mb") {
+        (&s[..s.len()-2], 1_048_576usize)
+    } else if s.ends_with("kb") {
+        (&s[..s.len()-2], 1024usize)
+    } else {
+        (s.as_str(), 1usize)
+    };
+    let num: f64 = num_str.trim().parse().unwrap_or(0.0);
+    (num * suffix as f64) as usize
+}
+
+// ── Shared helpers ─────────────────────────────────────────────────
 
 fn npy_header(desc: &TensorDescriptor) -> Vec<u8> {
     let dtype = desc.dtype().unwrap_or(DType::F32);

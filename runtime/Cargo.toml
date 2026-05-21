@@ -1,0 +1,28 @@
+[package]
+name = "axon-runtime"
+description = "SSD-backed lazy mmap runtime for .axon model weights — caching, partial loading, LoRA side-loading"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+axon-core = { path = "../core" }
+memmap2 = "0.9"
+lru = "0.12"
+serde_json = "1"
+log = "0.4"
+
+[dev-dependencies]
+tempfile = "3"
+criterion = { version = "0.5", features = ["html_reports"] }
+
+[lib]
+name = "axon_runtime"
+path = "src/lib.rs"
+crate-type = ["lib"]
+
+[[bench]]
+name = "runtime"
+path = "benches/runtime.rs"
+harness = false

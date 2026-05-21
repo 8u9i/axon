@@ -8,6 +8,7 @@ license.workspace = true
 
 [dependencies]
 axon-core = { path = "../core", features = ["mmap"] }
+axon-runtime = { path = "../runtime" }
 clap = { version = "4", features = ["derive"] }
 serde_json = "1"
 serde = { version = "1", features = ["derive"] }
