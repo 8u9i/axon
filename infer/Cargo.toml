@@ -1,0 +1,19 @@
+[package]
+name = "axon-infer"
+description = "Native inference engine for .axon models — transformer forward pass, KV cache, sampling, chat loop"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+axon-core = { path = "../core" }
+axon-runtime = { path = "../runtime" }
+half = "2"
+serde_json = "1"
+log = "0.4"
+
+[lib]
+name = "axon_infer"
+path = "src/lib.rs"
+crate-type = ["lib"]

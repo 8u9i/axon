@@ -99,6 +99,7 @@ name = "axon-cli"
 version = "1.0.0"
 dependencies = [
  "axon-core",
+ "axon-infer",
  "axon-runtime",
  "chrono",
  "clap",
@@ -131,6 +132,17 @@ version = "1.0.0"
 dependencies = [
  "axon-core",
  "libc",
+]
+
+[[package]]
+name = "axon-infer"
+version = "1.0.0"
+dependencies = [
+ "axon-core",
+ "axon-runtime",
+ "half",
+ "log",
+ "serde_json",
 ]
 
 [[package]]

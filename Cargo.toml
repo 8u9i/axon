@@ -5,6 +5,7 @@ members = [
     "cli",
     "ffi",
     "runtime",
+    "infer",
 ]
 
 [workspace.package]
