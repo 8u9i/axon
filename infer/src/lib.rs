@@ -25,6 +25,7 @@
 
 pub mod chat;
 pub mod dtype;
+pub mod gemma4;
 pub mod kv_cache;
 pub mod model;
 pub mod ops;

@@ -53,6 +53,35 @@ impl Tokenizer {
         }
     }
 
+    /// Build a tokenizer from an AxonRuntime's manifest directly (no LoadedModel).
+    pub fn from_runtime_manifest(rt: &axon_runtime::AxonRuntime, vocab_size: usize) -> Result<Self, String> {
+        let manifest = rt.manifest();
+        let tokenizer_config = &manifest.tokenizer;
+
+        let bos_id = tokenizer_config.as_ref().and_then(|t| t.bos_token.as_ref())
+            .and_then(|_| Some(1u32)).unwrap_or(1);
+        let eos_id = tokenizer_config.as_ref().and_then(|t| t.eos_token.as_ref())
+            .and_then(|_| Some(2u32)).unwrap_or(2);
+        let add_bos = tokenizer_config.as_ref().map(|t| t.bos_token.is_some()).unwrap_or(true);
+
+        let mut vocab = Vec::with_capacity(vocab_size.max(256));
+        for i in 0..vocab_size.max(256) {
+            let token = if i < 256 {
+                format!("<0x{:02X}>", i)
+            } else if i == bos_id as usize {
+                "<s>".to_string()
+            } else if i == eos_id as usize {
+                "</s>".to_string()
+            } else if i == 0 {
+                "<unk>".to_string()
+            } else {
+                format!("<token_{}>", i)
+            };
+            vocab.push((token, i as u32));
+        }
+        Ok(Self::new(vocab, bos_id as u32, eos_id as u32, add_bos))
+    }
+
     /// Build a tokenizer from the model's manifest tokenizer config and
     /// optionally by scanning the embedding table for known tokens.
     pub fn from_model(model: &crate::model::LoadedModel) -> Result<Self, String> {

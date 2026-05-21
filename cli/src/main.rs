@@ -7,6 +7,7 @@ use std::time::Instant;
 
 use axon_core::*;
 use axon_infer::chat::InferenceEngine;
+use axon_infer::gemma4::Gemma4Engine;
 use axon_infer::sampling::SamplingParams;
 use axon_runtime::AxonRuntime;
 use clap::{Args, Parser, Subcommand};
@@ -730,11 +731,21 @@ fn cmd_run(args: &RunArgs) -> CliResult {
     let path = &args.model;
 
     println!("Loading model: {}", path.display());
-    let start = Instant::now();
+    let load_start = Instant::now();
+
+    // Check architecture to pick the right engine
+    let arch = {
+        let rt = AxonRuntime::open(path).map_err(|e| format!("failed to open model: {e}"))?;
+        rt.architecture().to_string()
+    };
+
+    if arch == "gemma4" {
+        return cmd_run_gemma4(args, path, load_start);
+    }
+
     let mut engine =
         InferenceEngine::load(path).map_err(|e| format!("failed to load model: {e}"))?;
-    let load_time = start.elapsed();
-
+    let load_time = load_start.elapsed();
     let config = engine.config();
 
     println!(
@@ -747,7 +758,6 @@ fn cmd_run(args: &RunArgs) -> CliResult {
     );
     println!();
 
-    // Set sampling params
     engine.set_sampling(SamplingParams {
         temperature: args.temperature,
         top_k: args.top_k,
@@ -756,10 +766,8 @@ fn cmd_run(args: &RunArgs) -> CliResult {
     });
 
     if let Some(prompt) = &args.prompt {
-        // Single prompt mode
         print!("{}", prompt);
         std::io::stdout().flush().map_err(|e| format!("IO error: {e}"))?;
-
         let gen_start = Instant::now();
         let (response, stats) = engine
             .generate_text(prompt, args.max_tokens)
@@ -769,19 +777,53 @@ fn cmd_run(args: &RunArgs) -> CliResult {
         if args.stats {
             eprintln!(
                 "  [prompt: {} tok | gen: {} tok | {:.2} tok/s | total: {:.1}s]",
-                stats.prompt_tokens,
-                stats.generated_tokens,
-                stats.tokens_per_second,
-                gen_time
+                stats.prompt_tokens, stats.generated_tokens, stats.tokens_per_second, gen_time
             );
         }
     } else {
-        // Interactive chat mode
-        engine
-            .chat(args.system_prompt.as_deref(), args.max_tokens)
+        engine.chat(args.system_prompt.as_deref(), args.max_tokens)
             .map_err(|e| format!("chat error: {e}"))?;
     }
+    Ok(())
+}
 
+fn cmd_run_gemma4(args: &RunArgs, path: &std::path::Path, load_start: Instant) -> CliResult {
+    let mut engine = Gemma4Engine::load(path).map_err(|e| format!("failed to load Gemma4: {e}"))?;
+    let load_time = load_start.elapsed();
+
+    println!(
+        "  Gemma4: {} layers, {} dim, {} heads, {} vocab",
+        engine.config.n_layers, engine.config.dim, engine.config.n_heads, engine.config.vocab_size
+    );
+    println!("  Context: {} tokens  |  Load time: {:?}", engine.config.ctx_len, load_time);
+    println!();
+
+    engine.set_sampling(SamplingParams {
+        temperature: args.temperature,
+        top_k: args.top_k,
+        top_p: args.top_p,
+        repeat_penalty: args.repeat_penalty,
+    });
+
+    if let Some(prompt) = &args.prompt {
+        print!("{}", prompt);
+        std::io::stdout().flush().map_err(|e| format!("IO error: {e}"))?;
+        let gen_start = Instant::now();
+        let (response, stats) = engine
+            .generate_text(prompt, args.max_tokens)
+            .map_err(|e| format!("generation failed: {e}"))?;
+        println!("{}", response);
+        if args.stats {
+            eprintln!(
+                "  [prompt: {} tok | gen: {} tok | {:.2} tok/s | total: {:.1}s]",
+                stats.prompt_tokens, stats.generated_tokens, stats.tokens_per_second,
+                gen_start.elapsed().as_secs_f64()
+            );
+        }
+    } else {
+        engine.chat(args.system_prompt.as_deref(), args.max_tokens)
+            .map_err(|e| format!("chat error: {e}"))?;
+    }
     Ok(())
 }
 

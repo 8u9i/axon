@@ -87,16 +87,31 @@ pub fn bytes_as_f16_f32(data: &[u8]) -> Vec<f32> {
     f16s.iter().map(|&b| f16::from_le_bytes(b.to_le_bytes()).to_f32()).collect()
 }
 
+/// Dequantize a tensor stored as raw 1-byte-per-element quantized values.
+///
+/// This format stores each element as a single byte, with input_min/input_max
+/// tensors describing the quantization range. Since we don't have access to
+/// the min/max tensors in this function, we simply convert U8 to f32 directly.
+///
+/// For weights that use the asymmetric U8 quant (common in GGUF type 12 Q4_K
+/// or type 30), this provides a best-effort conversion.
+pub fn dequantize_u8_as_u8(data: &[u8]) -> Vec<f32> {
+    data.iter().map(|&b| b as f32 / 128.0 - 1.0).collect()
+}
+
 /// Dequantize a tensor based on its DType.
 ///
 /// For F32/F16/BF16, returns the f32 data.
-/// For Q4/Q8, dequantizes to f32.
+/// For Q4 uses Q4_0 block dequantization (llama.cpp compatible).
+/// For Q8 uses Q8_0 block dequantization.
+/// For U8, simple byte-to-float conversion.
 pub fn dequantize_tensor(data: &[u8], dtype: DType) -> Vec<f32> {
     match dtype {
         DType::F32 => bytes_as_f32(data).to_vec(),
         DType::F16 | DType::BF16 => bytes_as_f16_f32(data),
         DType::Q4 => dequantize_q4_0(data),
         DType::Q8 => dequantize_q8_0(data),
+        DType::U8 => dequantize_u8_as_u8(data),
         _ => {
             log::warn!("Unsupported dtype {:?} for dequantization, treating as F32", dtype);
             bytes_as_f32(data).to_vec()
@@ -104,11 +119,28 @@ pub fn dequantize_tensor(data: &[u8], dtype: DType) -> Vec<f32> {
     }
 }
 
+/// Convert byte data to f32 with simple scaling.
+/// Assumes each byte represents one value, scaled to [-1, 1].
+/// This handles the GGUF Q4_K/U8-style format where quantization min/max
+/// tensors are stored separately and weights are just normalized bytes.
+fn bytes_to_float_scale(data: &[u8]) -> Vec<f32> {
+    // This format is used when GGUF type codes 12 (Q4_K), 14 (Q6_K), 30
+    // etc. are mapped to DType::Q4. The actual quantization is asymmetric
+    // with per-tensor min/max stored in separate input_max/input_min tensors.
+    // Without those, we do a best-effort conversion.
+    let n = data.len();
+    let mut result = Vec::with_capacity(n);
+    for &b in data {
+        result.push(b as f32 / 128.0 - 1.0);
+    }
+    result
+}
+
 /// The number of bytes per block for a quantized type.
 pub fn block_size_bytes(dtype: DType) -> usize {
     match dtype {
-        DType::Q4 => 18,   // 2 (scale) + 16 (nibbles)
-        DType::Q8 => 34,   // 2 (scale) + 32 (values)
+        DType::Q4 => 18,   // 2 (scale) + 16 (nibbles) — llama.cpp Q4_0 format
+        DType::Q8 => 34,   // 2 (scale) + 32 (values) — llama.cpp Q8_0 format
         _ => 4,
     }
 }
@@ -131,6 +163,8 @@ pub fn row_stride_bytes(cols: usize, dtype: DType) -> usize {
             let num_blocks = cols.div_ceil(vals_per_block);
             num_blocks * bytes_per_block
         }
+        // For U8, use 1 byte per element
+        DType::U8 => cols,
         _ => cols * dtype.size_in_bytes(),
     }
 }
@@ -144,6 +178,7 @@ pub fn flat_size_bytes(n: usize, dtype: DType) -> usize {
             let num_blocks = n.div_ceil(vals_per_block);
             num_blocks * bytes_per_block
         }
+        DType::U8 => n,
         _ => n * dtype.size_in_bytes(),
     }
 }

@@ -206,6 +206,8 @@ axon convert     Export manifest as JSON
 axon bench       Benchmark load/index performance
 axon import-gguf Import a GGUF model into .axon format
 axon import-ollama Import a locally installed Ollama model into .axon format
+axon chat        Chat through a local Ollama model
+axon bench-ollama Measure Ollama load time, memory, and token speed
 axon runtime     Runtime subcommands: inspect, tensor, slice, stats, bench
 ```
 
@@ -228,6 +230,13 @@ manifest/blob store directly without starting the Ollama server:
 axon import-ollama gemma3:1b --output gemma3-1b.axon
 axon inspect gemma3-1b.axon
 axon validate gemma3-1b.axon
+```
+
+Axon can also call Ollama's local chat API and print performance stats:
+
+```bash
+axon chat gemma3:1b "Explain Axon in one sentence." --stats
+axon bench-ollama gemma3:1b --runs 3
 ```
 
 This importer preserves GGUF tensor byte ranges and metadata for Axon workflows.
