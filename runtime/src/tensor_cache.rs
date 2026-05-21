@@ -18,23 +18,18 @@
 //! unpinned tensors (LRU order) until `current_usage + tensor_size <= budget`.
 //! Pinned tensor sizes count toward current_usage but are never evicted.
 
-use std::sync::Arc;
 use std::collections::HashSet;
+use std::sync::Arc;
 
 use lru::LruCache;
 
 /// Eviction policy for the tensor cache.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum EvictionPolicy {
-    /// Least Recently Used — evict the tensor that hasn't been accessed
+    /// Least Recently Used - evict the tensor that hasn't been accessed
     /// for the longest time.
+    #[default]
     Lru,
-}
-
-impl Default for EvictionPolicy {
-    fn default() -> Self {
-        Self::Lru
-    }
 }
 
 /// Statistics about cache behavior.
@@ -58,12 +53,20 @@ impl CacheStats {
     /// Cache hit ratio (0.0 to 1.0), or `None` if no accesses.
     pub fn hit_ratio(&self) -> Option<f64> {
         let total = self.hits + self.misses;
-        if total == 0 { None } else { Some(self.hits as f64 / total as f64) }
+        if total == 0 {
+            None
+        } else {
+            Some(self.hits as f64 / total as f64)
+        }
     }
 
     /// Current memory usage as a fraction of budget (0.0 to 1.0).
     pub fn usage_ratio(&self) -> f64 {
-        if self.budget == 0 { 0.0 } else { self.current_usage as f64 / self.budget as f64 }
+        if self.budget == 0 {
+            0.0
+        } else {
+            self.current_usage as f64 / self.budget as f64
+        }
     }
 }
 
@@ -261,7 +264,10 @@ impl TensorCache {
     /// Evict one unpinned tensor (LRU order). Returns `false` if none can be evicted.
     fn evict_one(&mut self) -> bool {
         // Find the first unpinned entry
-        let evict_name = self.inner.iter().rev()
+        let evict_name = self
+            .inner
+            .iter()
+            .rev()
             .find(|(name, _)| !self.pinned.contains(*name))
             .map(|(name, _)| name.clone());
 

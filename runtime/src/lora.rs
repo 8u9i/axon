@@ -53,22 +53,17 @@ use std::path::Path;
 
 use axon_core::{AxonError, AxonResult};
 
-use crate::runtime::{AxonRuntime, TensorInfo, TensorAccess};
+use crate::runtime::{AxonRuntime, TensorAccess, TensorInfo};
 use crate::tensor_cache::TensorCache;
 
 /// How a patch tensor should be applied to the base tensor.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum PatchStrategy {
     /// Patch tensor completely replaces the base tensor.
+    #[default]
     Override,
     /// Patch tensor is added element-wise to the base tensor.
     Add,
-}
-
-impl Default for PatchStrategy {
-    fn default() -> Self {
-        Self::Override
-    }
 }
 
 /// A single patch entry — maps a base model tensor to a patch tensor.
@@ -108,7 +103,7 @@ pub struct PatchedRuntime {
     /// Attached patch runtimes.
     patches: Vec<AttachedPatch>,
     /// Optional cache shared across base + patches.
-    cache: Option<TensorCache>,
+    _cache: Option<TensorCache>,
     /// Which patch is currently active (index into `patches`, or `None` for base).
     active_patch: Option<usize>,
 }
@@ -125,7 +120,7 @@ impl PatchedRuntime {
         Self {
             base,
             patches: Vec::new(),
-            cache: None,
+            _cache: None,
             active_patch: None,
         }
     }
@@ -195,7 +190,12 @@ impl PatchedRuntime {
     ///
     /// Unlike `attach()`, this takes raw tensor names and does not
     /// attempt to infer LoRA naming conventions.
-    pub fn attach_raw<P: AsRef<Path>>(&mut self, path: P, name: &str, entries: Vec<PatchEntry>) -> AxonResult<usize> {
+    pub fn attach_raw<P: AsRef<Path>>(
+        &mut self,
+        path: P,
+        name: &str,
+        entries: Vec<PatchEntry>,
+    ) -> AxonResult<usize> {
         let patch_rt = AxonRuntime::open(&path)?;
         let count = entries.len();
         self.patches.push(AttachedPatch {
@@ -242,11 +242,12 @@ impl PatchedRuntime {
     /// Must be done for each tensor independently since we can only
     /// read one at a time from the mmap.
     pub fn merge_lora(&self, output_path: &Path, patch_index: usize) -> AxonResult<()> {
-        use std::fs;
         use axon_core::AxonBuilder;
-        
+        use std::fs;
 
-        let patch = self.patches.get(patch_index)
+        let patch = self
+            .patches
+            .get(patch_index)
             .ok_or_else(|| AxonError::InvalidManifest("Patch index out of range".into()))?;
 
         let mut builder = AxonBuilder::new();
@@ -256,26 +257,23 @@ impl PatchedRuntime {
             let base_data = self.base.tensor(&info.name)?;
 
             // Check if this tensor is patched
-            let patched = patch.entries.iter()
-                .find(|e| e.base_name == info.name);
+            let patched = patch.entries.iter().find(|e| e.base_name == info.name);
 
             if let Some(entry) = patched {
                 let patch_data = patch.runtime.tensor(&entry.patch_name)?;
                 match entry.strategy {
                     PatchStrategy::Override => {
-                        builder = builder.add_tensor(
-                            &info.name, patch_data, info.dtype, &info.shape,
-                        );
+                        builder =
+                            builder.add_tensor(&info.name, patch_data, info.dtype, &info.shape);
                     }
                     PatchStrategy::Add => {
                         // Element-wise addition: base + patch
-                        let result: Vec<u8> = base_data.iter()
+                        let result: Vec<u8> = base_data
+                            .iter()
                             .zip(patch_data.iter())
                             .map(|(a, b)| a.wrapping_add(*b))
                             .collect();
-                        builder = builder.add_tensor(
-                            &info.name, result, info.dtype, &info.shape,
-                        );
+                        builder = builder.add_tensor(&info.name, result, info.dtype, &info.shape);
                     }
                 }
             } else {
@@ -285,7 +283,11 @@ impl PatchedRuntime {
 
         let output = builder.build()?;
         fs::write(output_path, &output)?;
-        log::info!("Merged LoRA into {} ({} tensors)", output_path.display(), base_tensors.len());
+        log::info!(
+            "Merged LoRA into {} ({} tensors)",
+            output_path.display(),
+            base_tensors.len()
+        );
         Ok(())
     }
 
@@ -303,11 +305,18 @@ impl PatchedRuntime {
     }
 
     /// Get a byte range from a tensor, checking patches first.
-    pub fn tensor_byte_range(&self, name: &str, byte_offset: u64, size: u64) -> AxonResult<Vec<u8>> {
+    pub fn tensor_byte_range(
+        &self,
+        name: &str,
+        byte_offset: u64,
+        size: u64,
+    ) -> AxonResult<Vec<u8>> {
         if let Some(idx) = self.active_patch {
             let patch = &self.patches[idx];
             if let Some(entry) = patch.entries.iter().find(|e| e.base_name == name) {
-                return patch.runtime.tensor_byte_range(&entry.patch_name, byte_offset, size);
+                return patch
+                    .runtime
+                    .tensor_byte_range(&entry.patch_name, byte_offset, size);
             }
         }
         self.base.tensor_byte_range(name, byte_offset, size)
@@ -347,7 +356,9 @@ impl PatchedRuntime {
 
     /// Number of entries in the active patch.
     pub fn active_patch_entry_count(&self) -> usize {
-        self.active_patch.map(|i| self.patches[i].entries.len()).unwrap_or(0)
+        self.active_patch
+            .map(|i| self.patches[i].entries.len())
+            .unwrap_or(0)
     }
 
     /// Strip LoRA suffixes from a tensor name to derive the base tensor name.
@@ -357,10 +368,7 @@ impl PatchedRuntime {
     /// - `layers.0.self_attn.q_proj.lora_b.weight` → `layers.0.self_attn.q_proj.weight`
     fn strip_lora_suffix(name: &str) -> Option<&str> {
         // Common LoRA naming patterns from HuggingFace PEFT
-        for suffix in &[
-            ".lora_A", ".lora_B",
-            ".lora_a", ".lora_b",
-        ] {
+        for suffix in &[".lora_A", ".lora_B", ".lora_a", ".lora_b"] {
             if let Some(base) = name.strip_suffix(suffix) {
                 // If the name ends with ".weight" or ".bias" after stripping,
                 // we need to append it back. Actually the full name is
@@ -388,10 +396,14 @@ impl PatchedRuntime {
         }
         // Try unstripped — handle "X.lora_A.weight" -> strip ".lora_A.weight"
         for suffix in &[
-            ".lora_A.weight", ".lora_B.weight",
-            ".lora_a.weight", ".lora_b.weight",
-            ".lora_A", ".lora_B",
-            ".lora_a", ".lora_b",
+            ".lora_A.weight",
+            ".lora_B.weight",
+            ".lora_a.weight",
+            ".lora_b.weight",
+            ".lora_A",
+            ".lora_B",
+            ".lora_a",
+            ".lora_b",
         ] {
             if let Some(base) = name.strip_suffix(suffix) {
                 return Some(base);
@@ -414,9 +426,9 @@ impl TensorAccess for PatchedRuntime {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use axon_core::{AxonBuilder, DType};
     use std::fs;
     use std::path::PathBuf;
-    use axon_core::{AxonBuilder, DType};
 
     fn test_dir() -> PathBuf {
         let dir = PathBuf::from("output");
@@ -429,9 +441,24 @@ mod tests {
         let data: Vec<u8> = (0..64).map(|i| i as u8).collect();
         let mut builder = AxonBuilder::new().model("base-model").architecture("test");
         // Tensor names match a typical transformer
-        builder = builder.add_tensor("layers.0.self_attn.q_proj.weight", data.clone(), DType::U8, &[8, 8]);
-        builder = builder.add_tensor("layers.0.self_attn.v_proj.weight", data.clone(), DType::U8, &[8, 8]);
-        builder = builder.add_tensor("layers.0.mlp.gate_proj.weight", data.clone(), DType::U8, &[8, 8]);
+        builder = builder.add_tensor(
+            "layers.0.self_attn.q_proj.weight",
+            data.clone(),
+            DType::U8,
+            &[8, 8],
+        );
+        builder = builder.add_tensor(
+            "layers.0.self_attn.v_proj.weight",
+            data.clone(),
+            DType::U8,
+            &[8, 8],
+        );
+        builder = builder.add_tensor(
+            "layers.0.mlp.gate_proj.weight",
+            data.clone(),
+            DType::U8,
+            &[8, 8],
+        );
         let bytes = builder.build().unwrap();
         fs::write(path, &bytes).unwrap();
     }
@@ -439,9 +466,21 @@ mod tests {
     /// Build a LoRA adapter with the HuggingFace PEFT naming convention.
     fn build_adapter(path: &Path) {
         let data: Vec<u8> = (0..64).map(|i| (255 - i) as u8).collect();
-        let mut builder = AxonBuilder::new().model("code-adapter").architecture("lora");
-        builder = builder.add_tensor("layers.0.self_attn.q_proj.lora_A.weight", data.clone(), DType::U8, &[8, 8]);
-        builder = builder.add_tensor("layers.0.self_attn.v_proj.lora_A.weight", data.clone(), DType::U8, &[8, 8]);
+        let mut builder = AxonBuilder::new()
+            .model("code-adapter")
+            .architecture("lora");
+        builder = builder.add_tensor(
+            "layers.0.self_attn.q_proj.lora_A.weight",
+            data.clone(),
+            DType::U8,
+            &[8, 8],
+        );
+        builder = builder.add_tensor(
+            "layers.0.self_attn.v_proj.lora_A.weight",
+            data.clone(),
+            DType::U8,
+            &[8, 8],
+        );
         let bytes = builder.build().unwrap();
         fs::write(path, &bytes).unwrap();
     }
@@ -449,8 +488,15 @@ mod tests {
     /// Build a raw patch file (for override testing).
     fn build_patch(path: &Path) {
         let data: Vec<u8> = (0..64).map(|i| 255 - (i as u8)).collect();
-        let mut builder = AxonBuilder::new().model("patch-model").architecture("patch");
-        builder = builder.add_tensor("layers.0.self_attn.q_proj.weight", data.clone(), DType::U8, &[8, 8]);
+        let mut builder = AxonBuilder::new()
+            .model("patch-model")
+            .architecture("patch");
+        builder = builder.add_tensor(
+            "layers.0.self_attn.q_proj.weight",
+            data.clone(),
+            DType::U8,
+            &[8, 8],
+        );
         let bytes = builder.build().unwrap();
         fs::write(path, &bytes).unwrap();
     }
@@ -472,7 +518,10 @@ mod tests {
 
         // Patched tensor should return adapter values
         let patched_data = patched.tensor("layers.0.self_attn.q_proj.weight").unwrap();
-        assert_eq!(patched_data[0], 255u8, "Patched tensor should have adapter value");
+        assert_eq!(
+            patched_data[0], 255u8,
+            "Patched tensor should have adapter value"
+        );
 
         // Unpatched tensor should return base values
         let base_data = patched.tensor("layers.0.mlp.gate_proj.weight").unwrap();
@@ -514,15 +563,15 @@ mod tests {
         let base = AxonRuntime::open(&base_path).unwrap();
         let mut patched = PatchedRuntime::new(base);
 
-        let entries = vec![
-            PatchEntry {
-                base_name: "layers.0.self_attn.q_proj.weight".to_string(),
-                patch_name: "layers.0.self_attn.q_proj.weight".to_string(),
-                strategy: PatchStrategy::Override,
-            },
-        ];
+        let entries = vec![PatchEntry {
+            base_name: "layers.0.self_attn.q_proj.weight".to_string(),
+            patch_name: "layers.0.self_attn.q_proj.weight".to_string(),
+            strategy: PatchStrategy::Override,
+        }];
 
-        patched.attach_raw(&patch_path, "explicit-patch", entries).unwrap();
+        patched
+            .attach_raw(&patch_path, "explicit-patch", entries)
+            .unwrap();
         assert_eq!(patched.patch_count(), 1);
 
         let data = patched.tensor("layers.0.self_attn.q_proj.weight").unwrap();
@@ -571,7 +620,7 @@ mod tests {
         );
         assert_eq!(
             PatchedRuntime::strip_lora_suffix("layers.0.self_attn.q_proj.weight"),
-            None,  // No LoRA suffix
+            None, // No LoRA suffix
         );
     }
 

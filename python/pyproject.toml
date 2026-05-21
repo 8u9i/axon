@@ -1,0 +1,56 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "axon-format"
+version = "1.0.0"
+description = "Adaptive eXecutable Object Notation: binary-first ML model weights with zero-copy loading"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT OR Apache-2.0"
+authors = [
+    { name = "Axon Project" }
+]
+keywords = [
+    "axon",
+    "deep-learning",
+    "file-format",
+    "machine-learning",
+    "mmap",
+    "model-weights",
+    "safetensors",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: System :: Archiving :: Packaging",
+]
+dependencies = [
+    "numpy>=1.21",
+]
+
+[project.optional-dependencies]
+torch = ["torch>=2.0"]
+dev = [
+    "build>=1.2",
+    "pytest>=7",
+    "pytest-benchmark>=4",
+]
+
+[project.urls]
+Homepage = "https://github.com/8u9i/axon"
+Repository = "https://github.com/8u9i/axon"
+Documentation = "https://github.com/8u9i/axon/blob/main/docs/spec.md"
+Issues = "https://github.com/8u9i/axon/issues"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["axon*"]

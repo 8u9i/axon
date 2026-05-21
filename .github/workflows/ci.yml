@@ -100,8 +100,11 @@ jobs:
 
       - name: Install Python deps
         run: |
-          pip install numpy
+          pip install build numpy
           pip install -e ./python
+
+      - name: Build Python package
+        run: python -m build ./python
 
       - name: Test Python bindings
         run: |

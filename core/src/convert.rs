@@ -11,8 +11,8 @@ use std::path::Path;
 
 use crate::error::{AxonError, AxonResult};
 use crate::manifest::AxonFile;
-use crate::tensor::DType;
 use crate::mmap_loader::AxonBuilder;
+use crate::tensor::DType;
 
 // ── SafeTensors import ────────────────────────────────────────────
 
@@ -36,12 +36,18 @@ pub struct SafeTensorEntry {
 /// The header is a JSON block preceded by an 8-byte little-endian length.
 pub fn parse_safetensors_header(data: &[u8]) -> AxonResult<SafeTensorsHeader> {
     if data.len() < 8 {
-        return Err(AxonError::UnexpectedEof { needed: 8, available: data.len() as u64 });
+        return Err(AxonError::UnexpectedEof {
+            needed: 8,
+            available: data.len() as u64,
+        });
     }
 
     let header_len = u64::from_le_bytes(data[0..8].try_into().unwrap()) as usize;
     if 8 + header_len > data.len() {
-        return Err(AxonError::UnexpectedEof { needed: (8 + header_len) as u64, available: data.len() as u64 });
+        return Err(AxonError::UnexpectedEof {
+            needed: (8 + header_len) as u64,
+            available: data.len() as u64,
+        });
     }
 
     // The actual header size includes padding to make (8 + header_len) % 64 == 0
@@ -81,18 +87,21 @@ fn convert_safetensor_entry(
     entry: &serde_json::Map<String, serde_json::Value>,
     payload_base: usize,
 ) -> AxonResult<SafeTensorEntry> {
-    let dtype_str = entry.get("dtype")
+    let dtype_str = entry
+        .get("dtype")
         .and_then(|v| v.as_str())
         .ok_or_else(|| AxonError::InvalidManifest(format!("{name}: missing dtype")))?;
 
-    let shape: Vec<u64> = entry.get("shape")
+    let shape: Vec<u64> = entry
+        .get("shape")
         .and_then(|v| v.as_array())
         .ok_or_else(|| AxonError::InvalidManifest(format!("{name}: missing shape")))?
         .iter()
         .map(|v| v.as_u64().unwrap_or(1))
         .collect();
 
-    let data_offsets = entry.get("data_offsets")
+    let data_offsets = entry
+        .get("data_offsets")
         .and_then(|v| v.as_array())
         .ok_or_else(|| AxonError::InvalidManifest(format!("{name}: missing data_offsets")))?;
 
@@ -148,16 +157,20 @@ pub fn export_manifest_json(axon_data: &[u8]) -> AxonResult<String> {
     let file = AxonFile::from_bytes(axon_data.to_vec())?;
     let manifest = &file.manifest;
 
-    let tensors: Vec<serde_json::Value> = manifest.tensor_order.iter().map(|name| {
-        let desc = manifest.get_tensor(name).unwrap();
-        let dtype_name = desc.dtype().map(|d| d.name()).unwrap_or("UNKNOWN");
-        serde_json::json!({
-            "name": name,
-            "dtype": dtype_name,
-            "shape": desc.shape_vec(),
-            "size_bytes": desc.data_size,
+    let tensors: Vec<serde_json::Value> = manifest
+        .tensor_order
+        .iter()
+        .map(|name| {
+            let desc = manifest.get_tensor(name).unwrap();
+            let dtype_name = desc.dtype().map(|d| d.name()).unwrap_or("UNKNOWN");
+            serde_json::json!({
+                "name": name,
+                "dtype": dtype_name,
+                "shape": desc.shape_vec(),
+                "size_bytes": desc.data_size,
+            })
         })
-    }).collect();
+        .collect();
 
     let output = serde_json::json!({
         "model": manifest.model,

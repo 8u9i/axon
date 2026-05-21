@@ -6,7 +6,7 @@
 use std::fs;
 use std::path::PathBuf;
 
-use axon_core::{AxonBuilder, DType, AxonFile, AxonHeader, TensorDescriptor};
+use axon_core::{AxonBuilder, AxonHeader, DType};
 use axon_runtime::AxonRuntime;
 
 fn test_dir() -> PathBuf {
@@ -131,7 +131,9 @@ fn test_invalid_tensor_name_lookup() {
     // Various invalid names — should all return TensorNotFound, not panic
     assert!(rt.tensor_view("").is_err());
     assert!(rt.tensor_view("\0").is_err());
-    assert!(rt.tensor_view("nonexistent_tensor_that_doesnt_exist").is_err());
+    assert!(rt
+        .tensor_view("nonexistent_tensor_that_doesnt_exist")
+        .is_err());
     assert!(rt.tensor_view("layer_0_weight\x00extra").is_err());
 }
 
@@ -150,7 +152,7 @@ fn test_negative_offset_does_not_crash() {
     if desc_start + 192 <= bytes.len() {
         // Set data_offset to a value beyond file size
         let huge_offset: u64 = 1_000_000_000_000;
-        let offset_pos = desc_start + 136;  // data_offset field at byte 136
+        let offset_pos = desc_start + 136; // data_offset field at byte 136
         bytes[offset_pos..offset_pos + 8].copy_from_slice(&huge_offset.to_le_bytes());
         write_raw(&path, &bytes);
 
@@ -173,10 +175,14 @@ fn test_interleaved_tensor_names() {
     let rt = AxonRuntime::open(&path).unwrap();
 
     // "abc" should not match "abc.weight"
-    assert!(rt.tensor_view("abc").is_err(),
-            "Partial name 'abc' should not match 'abc.weight'");
-    assert!(rt.tensor_view("abc.weight").is_ok(),
-            "Exact name 'abc.weight' should match");
+    assert!(
+        rt.tensor_view("abc").is_err(),
+        "Partial name 'abc' should not match 'abc.weight'"
+    );
+    assert!(
+        rt.tensor_view("abc.weight").is_ok(),
+        "Exact name 'abc.weight' should match"
+    );
 }
 
 #[test]
@@ -189,8 +195,8 @@ fn test_corrupt_manifest_json() {
     let manifest_start = header.manifest_offset as usize;
     let manifest_end = manifest_start + header.manifest_size as usize;
     if manifest_end <= bytes.len() {
-        for i in manifest_start..manifest_end {
-            bytes[i] = 0xFF;
+        for byte in bytes.iter_mut().take(manifest_end).skip(manifest_start) {
+            *byte = 0xFF;
         }
     }
     write_raw(&path, &bytes);
@@ -264,7 +270,12 @@ fn test_many_tensors() {
     let path = test_dir().join("many_tensors.axon");
     let mut builder = AxonBuilder::new();
     for i in 0..1000 {
-        builder = builder.add_tensor(&format!("tensor_{:04}", i), vec![i as u8; 4], DType::U8, &[4]);
+        builder = builder.add_tensor(
+            &format!("tensor_{:04}", i),
+            vec![i as u8; 4],
+            DType::U8,
+            &[4],
+        );
     }
     let bytes = builder.build().unwrap();
     write_raw(&path, &bytes);

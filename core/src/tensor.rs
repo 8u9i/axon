@@ -39,23 +39,41 @@ impl DType {
         }
     }
 
-    pub fn to_code(self) -> u32 { self as u32 }
+    pub fn to_code(self) -> u32 {
+        self as u32
+    }
 
     pub fn size_in_bytes(self) -> usize {
         match self {
-            Self::F32 => 4,  Self::F16 => 2,  Self::BF16 => 2,
-            Self::I32 => 4,  Self::I64 => 8,  Self::U8  => 1,
-            Self::Q4  => 1,  Self::Q8  => 1,  Self::F8E4M3 => 1,
-            Self::F8E5M2 => 1, Self::I8 => 1, Self::I16 => 2,
+            Self::F32 => 4,
+            Self::F16 => 2,
+            Self::BF16 => 2,
+            Self::I32 => 4,
+            Self::I64 => 8,
+            Self::U8 => 1,
+            Self::Q4 => 1,
+            Self::Q8 => 1,
+            Self::F8E4M3 => 1,
+            Self::F8E5M2 => 1,
+            Self::I8 => 1,
+            Self::I16 => 2,
         }
     }
 
     pub fn name(self) -> &'static str {
         match self {
-            Self::F32 => "FP32",    Self::F16 => "FP16",    Self::BF16 => "BF16",
-            Self::I32 => "I32",     Self::I64 => "I64",     Self::U8  => "U8",
-            Self::Q4  => "Q4",      Self::Q8  => "Q8",      Self::F8E4M3 => "FP8_E4M3",
-            Self::F8E5M2 => "FP8_E5M2", Self::I8 => "I8",  Self::I16 => "I16",
+            Self::F32 => "FP32",
+            Self::F16 => "FP16",
+            Self::BF16 => "BF16",
+            Self::I32 => "I32",
+            Self::I64 => "I64",
+            Self::U8 => "U8",
+            Self::Q4 => "Q4",
+            Self::Q8 => "Q8",
+            Self::F8E4M3 => "FP8_E4M3",
+            Self::F8E5M2 => "FP8_E5M2",
+            Self::I8 => "I8",
+            Self::I16 => "I16",
         }
     }
 }
@@ -71,7 +89,12 @@ pub enum Affinity {
 
 impl Affinity {
     pub fn from_code(code: u32) -> Self {
-        match code { 1 => Self::Hbm, 2 => Self::SystemRam, 3 => Self::Llc, _ => Self::Default }
+        match code {
+            1 => Self::Hbm,
+            2 => Self::SystemRam,
+            3 => Self::Llc,
+            _ => Self::Default,
+        }
     }
 }
 
@@ -96,7 +119,6 @@ pub const TENSOR_NAME_MAX: usize = 64;
 /// | 168    | 24   | padding2    | Padding to 192 bytes             |
 ///
 /// Total: 192 bytes.
-
 #[repr(C, align(64))]
 #[derive(Debug, Clone)]
 pub struct TensorDescriptor {
@@ -114,7 +136,15 @@ pub struct TensorDescriptor {
 impl TensorDescriptor {
     pub const SIZE: usize = 192;
 
-    pub fn new(name: &str, dtype: DType, shape: &[u64], data_offset: u64, data_size: u64, affinity: Affinity, checksum: u64) -> Self {
+    pub fn new(
+        name: &str,
+        dtype: DType,
+        shape: &[u64],
+        data_offset: u64,
+        data_size: u64,
+        affinity: Affinity,
+        checksum: u64,
+    ) -> Self {
         let mut name_bytes = [0u8; TENSOR_NAME_MAX];
         let name_slice = name.as_bytes();
         let len = name_slice.len().min(TENSOR_NAME_MAX - 1);
@@ -126,11 +156,25 @@ impl TensorDescriptor {
             shape_arr[i] = d;
         }
 
-        Self { name: name_bytes, dtype: dtype.to_code(), rank: shape.len() as u32, shape: shape_arr, data_offset, data_size, affinity: affinity as u32, _padding: 0, checksum }
+        Self {
+            name: name_bytes,
+            dtype: dtype.to_code(),
+            rank: shape.len() as u32,
+            shape: shape_arr,
+            data_offset,
+            data_size,
+            affinity: affinity as u32,
+            _padding: 0,
+            checksum,
+        }
     }
 
     pub fn name_str(&self) -> &str {
-        let end = self.name.iter().position(|&b| b == 0).unwrap_or(TENSOR_NAME_MAX);
+        let end = self
+            .name
+            .iter()
+            .position(|&b| b == 0)
+            .unwrap_or(TENSOR_NAME_MAX);
         std::str::from_utf8(&self.name[..end]).unwrap_or("")
     }
 
@@ -142,27 +186,38 @@ impl TensorDescriptor {
         self.shape[..self.rank as usize].iter().product()
     }
 
-    pub fn dtype(&self) -> AxonResult<DType> { DType::from_code(self.dtype) }
-    pub fn affinity(&self) -> Affinity { Affinity::from_code(self.affinity) }
+    pub fn dtype(&self) -> AxonResult<DType> {
+        DType::from_code(self.dtype)
+    }
+    pub fn affinity(&self) -> Affinity {
+        Affinity::from_code(self.affinity)
+    }
 
     pub fn to_bytes(&self) -> AxonResult<Vec<u8>> {
         let mut buf = Vec::with_capacity(Self::SIZE);
         buf.write_all(&self.name)?;
         buf.write_u32::<LittleEndian>(self.dtype)?;
         buf.write_u32::<LittleEndian>(self.rank)?;
-        for &s in &self.shape { buf.write_u64::<LittleEndian>(s)?; }
+        for &s in &self.shape {
+            buf.write_u64::<LittleEndian>(s)?;
+        }
         buf.write_u64::<LittleEndian>(self.data_offset)?;
         buf.write_u64::<LittleEndian>(self.data_size)?;
         buf.write_u32::<LittleEndian>(self.affinity)?;
         buf.write_u32::<LittleEndian>(self._padding)?;
         buf.write_u64::<LittleEndian>(self.checksum)?;
-        while buf.len() < Self::SIZE { buf.write_u8(0)?; }
+        while buf.len() < Self::SIZE {
+            buf.write_u8(0)?;
+        }
         Ok(buf)
     }
 
     pub fn from_bytes(bytes: &[u8]) -> AxonResult<Self> {
         if bytes.len() < Self::SIZE {
-            return Err(AxonError::UnexpectedEof { needed: Self::SIZE as u64, available: bytes.len() as u64 });
+            return Err(AxonError::UnexpectedEof {
+                needed: Self::SIZE as u64,
+                available: bytes.len() as u64,
+            });
         }
         let mut cursor = Cursor::new(bytes);
         let mut name = [0u8; TENSOR_NAME_MAX];
@@ -170,12 +225,24 @@ impl TensorDescriptor {
         let dtype = cursor.read_u32::<LittleEndian>()?;
         let rank = cursor.read_u32::<LittleEndian>()?;
         let mut shape = [0u64; MAX_TENSOR_RANK];
-        for s in &mut shape { *s = cursor.read_u64::<LittleEndian>()?; }
+        for s in &mut shape {
+            *s = cursor.read_u64::<LittleEndian>()?;
+        }
         let data_offset = cursor.read_u64::<LittleEndian>()?;
         let data_size = cursor.read_u64::<LittleEndian>()?;
         let affinity = cursor.read_u32::<LittleEndian>()?;
         let _padding = cursor.read_u32::<LittleEndian>()?;
         let checksum = cursor.read_u64::<LittleEndian>()?;
-        Ok(Self { name, dtype, rank, shape, data_offset, data_size, affinity, _padding, checksum })
+        Ok(Self {
+            name,
+            dtype,
+            rank,
+            shape,
+            data_offset,
+            data_size,
+            affinity,
+            _padding,
+            checksum,
+        })
     }
 }

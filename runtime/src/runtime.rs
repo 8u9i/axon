@@ -30,28 +30,13 @@ use std::sync::Arc;
 use axon_core::header::AxonHeader;
 use axon_core::manifest::Manifest;
 use axon_core::tensor::TensorDescriptor;
-use axon_core::{
-    AxonError, AxonResult, CACHE_LINE_SIZE,
-};
+use axon_core::{AxonError, AxonResult, CACHE_LINE_SIZE};
 
 use crate::mmap_store::MmapStore;
 use crate::stats::RuntimeStats;
-use crate::tensor_cache::{TensorCache, CacheStats as TensorCacheStats};
+use crate::tensor_cache::{CacheStats as TensorCacheStats, TensorCache};
 
-/// Configuration options for opening a runtime model.
-#[derive(Debug, Clone)]
-pub struct RuntimeOptions {
-    /// Optional cache budget in bytes. If 0, no caching is used.
-    pub cache_budget_bytes: usize,
-}
-
-impl Default for RuntimeOptions {
-    fn default() -> Self {
-        Self { cache_budget_bytes: 0 }
-    }
-}
-
-/// Metadata about a tensor in the model — no data loaded.
+/// Metadata about a tensor in the model - no data loaded.
 #[derive(Debug, Clone)]
 pub struct TensorInfo {
     /// Tensor name (e.g., "layers.0.self_attn.q_proj.weight").
@@ -127,7 +112,8 @@ impl AxonRuntime {
         let store = MmapStore::open(&path)?;
 
         // Parse header from the mmap (zero-copy)
-        let header_bytes = store.raw_slice(0, AxonHeader::HEADER_SIZE as u64)
+        let header_bytes = store
+            .raw_slice(0, AxonHeader::HEADER_SIZE as u64)
             .ok_or_else(|| AxonError::UnexpectedEof {
                 needed: AxonHeader::HEADER_SIZE as u64,
                 available: store.len(),
@@ -135,7 +121,8 @@ impl AxonRuntime {
         let header = AxonHeader::from_bytes(header_bytes)?;
 
         // Parse manifest from the mmap (zero-copy JSON parsing)
-        let manifest_bytes = store.raw_slice(header.manifest_offset, header.manifest_size)
+        let manifest_bytes = store
+            .raw_slice(header.manifest_offset, header.manifest_size)
             .ok_or_else(|| AxonError::UnexpectedEof {
                 needed: header.manifest_offset + header.manifest_size,
                 available: store.len(),
@@ -144,14 +131,19 @@ impl AxonRuntime {
             .map_err(|e| AxonError::InvalidManifest(e.to_string()))?;
 
         // Parse tensor descriptor table from the mmap
-        let tdt_start = align_up(header.manifest_offset + header.manifest_size, CACHE_LINE_SIZE);
+        let tdt_start = align_up(
+            header.manifest_offset + header.manifest_size,
+            CACHE_LINE_SIZE,
+        );
         let tdt_size = header.tensor_count * TensorDescriptor::SIZE as u64;
         let descriptors = if tdt_size > 0 {
-            let tdt_bytes = store.raw_slice(tdt_start, tdt_size)
-                .ok_or_else(|| AxonError::UnexpectedEof {
-                    needed: tdt_start + tdt_size,
-                    available: store.len(),
-                })?;
+            let tdt_bytes =
+                store
+                    .raw_slice(tdt_start, tdt_size)
+                    .ok_or_else(|| AxonError::UnexpectedEof {
+                        needed: tdt_start + tdt_size,
+                        available: store.len(),
+                    })?;
             parse_descriptor_table(tdt_bytes, header.tensor_count as usize)?
         } else {
             Vec::new()
@@ -239,7 +231,12 @@ impl AxonRuntime {
     /// # let rt = AxonRuntime::open("model.axon").unwrap();
     /// let first_4k = rt.tensor_byte_range("layer_0_q", 0, 4096).unwrap();
     /// ```
-    pub fn tensor_byte_range(&self, name: &str, byte_offset: u64, size: u64) -> AxonResult<Vec<u8>> {
+    pub fn tensor_byte_range(
+        &self,
+        name: &str,
+        byte_offset: u64,
+        size: u64,
+    ) -> AxonResult<Vec<u8>> {
         let desc = self.find_descriptor(name)?;
         if byte_offset + size > desc.data_size {
             return Err(AxonError::UnexpectedEof {
@@ -247,7 +244,9 @@ impl AxonRuntime {
                 available: desc.data_offset + desc.data_size,
             });
         }
-        let bytes = self.store.read_bytes(desc.data_offset + byte_offset, size)?;
+        let bytes = self
+            .store
+            .read_bytes(desc.data_offset + byte_offset, size)?;
         self.stats.record_access(size);
         Ok(bytes)
     }
@@ -267,7 +266,9 @@ impl AxonRuntime {
     /// ```
     pub fn tensor_view(&self, name: &str) -> AxonResult<&[u8]> {
         let desc = self.find_descriptor(name)?;
-        let slice = self.store.raw_slice(desc.data_offset, desc.data_size)
+        let slice = self
+            .store
+            .raw_slice(desc.data_offset, desc.data_size)
             .ok_or_else(|| AxonError::UnexpectedEof {
                 needed: desc.data_offset + desc.data_size,
                 available: self.store.len(),
@@ -295,7 +296,9 @@ impl AxonRuntime {
                 available: desc.data_offset + desc.data_size,
             });
         }
-        let slice = self.store.raw_slice(desc.data_offset + byte_offset, size)
+        let slice = self
+            .store
+            .raw_slice(desc.data_offset + byte_offset, size)
             .ok_or_else(|| AxonError::UnexpectedEof {
                 needed: desc.data_offset + byte_offset + size,
                 available: self.store.len(),
@@ -320,15 +323,18 @@ impl AxonRuntime {
         let shape = desc.shape_vec();
 
         if shape.len() < 2 {
-            return Err(AxonError::InvalidManifest(
-                format!("tensor_rows requires at least 2D tensor, got {}D for '{}'", shape.len(), name)
-            ));
+            return Err(AxonError::InvalidManifest(format!(
+                "tensor_rows requires at least 2D tensor, got {}D for '{}'",
+                shape.len(),
+                name
+            )));
         }
 
         let cols = shape[1] as usize;
         let elem_size = dtype.size_in_bytes();
-        let row_stride = cols.checked_mul(elem_size)
-            .ok_or_else(|| AxonError::AlignmentError {
+        let row_stride = cols
+            .checked_mul(elem_size)
+            .ok_or(AxonError::AlignmentError {
                 offset: 0,
                 alignment: 1,
             })?;
@@ -341,19 +347,27 @@ impl AxonRuntime {
             });
         }
 
-        let byte_offset = start_row.checked_mul(row_stride)
-            .ok_or_else(|| AxonError::AlignmentError { offset: 0, alignment: 1 })?;
+        let byte_offset = start_row
+            .checked_mul(row_stride)
+            .ok_or(AxonError::AlignmentError {
+                offset: 0,
+                alignment: 1,
+            })?;
         let num_rows = end_row - start_row;
-        let size = num_rows.checked_mul(row_stride)
-            .ok_or_else(|| AxonError::AlignmentError { offset: 0, alignment: 1 })?;
+        let size = num_rows
+            .checked_mul(row_stride)
+            .ok_or(AxonError::AlignmentError {
+                offset: 0,
+                alignment: 1,
+            })?;
 
-        let slice = self.store.raw_slice(
-            desc.data_offset + byte_offset as u64,
-            size as u64,
-        ).ok_or_else(|| AxonError::UnexpectedEof {
-            needed: desc.data_offset + byte_offset as u64 + size as u64,
-            available: self.store.len(),
-        })?;
+        let slice = self
+            .store
+            .raw_slice(desc.data_offset + byte_offset as u64, size as u64)
+            .ok_or_else(|| AxonError::UnexpectedEof {
+                needed: desc.data_offset + byte_offset as u64 + size as u64,
+                available: self.store.len(),
+            })?;
 
         self.stats.record_access(size as u64);
         Ok(slice)
@@ -444,8 +458,13 @@ impl CachedRuntime {
         let bytes = self.inner.tensor(name)?;
         let size = bytes.len();
         let arc = self.cache.put(name.to_string(), bytes);
-        log::debug!("Cached tensor '{}' ({} bytes, usage: {}/{})",
-                     name, size, self.cache.current_usage(), self.cache.budget());
+        log::debug!(
+            "Cached tensor '{}' ({} bytes, usage: {}/{})",
+            name,
+            size,
+            self.cache.current_usage(),
+            self.cache.budget()
+        );
         Ok(arc)
     }
 
@@ -532,9 +551,7 @@ mod tests {
 
     /// Build a synthetic .axon file for testing.
     fn build_test_axon(path: &Path) {
-        let mut builder = AxonBuilder::new()
-            .model("test-model")
-            .architecture("test");
+        let mut builder = AxonBuilder::new().model("test-model").architecture("test");
 
         // 10 tensors with known values
         for i in 0..10 {
@@ -591,7 +608,8 @@ mod tests {
         let rt = AxonRuntime::open(&path).expect("Failed to open runtime");
 
         // Zero-copy borrowed view — must point to valid data
-        let view: &[u8] = rt.tensor_view("layer_0_weight")
+        let view: &[u8] = rt
+            .tensor_view("layer_0_weight")
             .expect("Failed to get tensor view");
         assert_eq!(view.len(), 64);
         assert_eq!(view[0], 0u8);
@@ -606,7 +624,8 @@ mod tests {
         let rt = AxonRuntime::open(&path).expect("Failed to open runtime");
 
         // Zero-copy byte-range view
-        let view: &[u8] = rt.tensor_byte_view("layer_0_weight", 16..32)
+        let view: &[u8] = rt
+            .tensor_byte_view("layer_0_weight", 16..32)
             .expect("Failed to get byte view");
         assert_eq!(view.len(), 16);
         assert_eq!(view[0], 16u8);
@@ -650,9 +669,9 @@ mod tests {
 
     #[test]
     fn test_tensor_rows_2d() {
-        use std::fs;
         use axon_core::AxonBuilder;
         use axon_core::DType;
+        use std::fs;
 
         // Build a 2D tensor: 16 rows x 8 cols, U8
         let data: Vec<u8> = (0..128).map(|i| i as u8).collect();
@@ -693,9 +712,9 @@ mod tests {
 
     #[test]
     fn test_tensor_rows_invalid_range() {
-        use std::fs;
         use axon_core::AxonBuilder;
         use axon_core::DType;
+        use std::fs;
 
         let data = vec![0u8; 64];
         let path = test_dir().join("test_rows_invalid.axon");
@@ -721,9 +740,9 @@ mod tests {
 
     #[test]
     fn test_tensor_rows_on_1d_fails() {
-        use std::fs;
         use axon_core::AxonBuilder;
         use axon_core::DType;
+        use std::fs;
 
         let data = vec![0u8; 64];
         let path = test_dir().join("test_rows_1d.axon");
@@ -745,7 +764,9 @@ mod tests {
         build_test_axon(&path);
 
         let rt = AxonRuntime::open(&path).expect("Failed to open runtime");
-        let info = rt.tensor_info("layer_0_weight").expect("Failed to get info");
+        let info = rt
+            .tensor_info("layer_0_weight")
+            .expect("Failed to get info");
 
         assert_eq!(info.name, "layer_0_weight");
         assert_eq!(info.dtype, DType::U8);
@@ -761,14 +782,16 @@ mod tests {
         let rt = AxonRuntime::open(&path).expect("Failed to open runtime");
 
         // Load first 16 bytes of layer_3_weight
-        let partial = rt.tensor_byte_range("layer_3_weight", 0, 16)
+        let partial = rt
+            .tensor_byte_range("layer_3_weight", 0, 16)
             .expect("Failed to get byte range");
         assert_eq!(partial.len(), 16);
         assert_eq!(partial[0], (3 * 64) as u8);
         assert_eq!(partial[15], (3 * 64 + 15) as u8);
 
         // Load bytes 32-47
-        let mid = rt.tensor_byte_range("layer_3_weight", 32, 16)
+        let mid = rt
+            .tensor_byte_range("layer_3_weight", 32, 16)
             .expect("Failed to get mid range");
         assert_eq!(mid[0], (3 * 64 + 32) as u8);
     }

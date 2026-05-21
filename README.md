@@ -1,5 +1,5 @@
 <h1 align="center">
-  <img src="https://img.shields.io/badge/🧬-AXON-8A2BE2" height="40" alt="AXON"><br>
+  <img src="https://img.shields.io/badge/AXON-8A2BE2" height="40" alt="AXON"><br>
   Adaptive eXecutable Object Notation
 </h1>
 
@@ -8,9 +8,9 @@
 </p>
 
 <p align="center">
-  <strong>A runtime-first model weight container for memory-limited inference.</strong><br>
-  Instant loading · Memory-mapped tensor access · SSD-backed execution · LoRA side-loading<br>
-  Mixed precision · 64-byte aligned · XXH3 checksums · SafeTensors import
+  <strong>A runtime-first model-weight container for memory-limited inference.</strong><br>
+  Instant loading &middot; Memory-mapped tensor access &middot; SSD-backed execution &middot; LoRA side-loading<br>
+  Mixed precision &middot; 64-byte aligned &middot; XXH3 checksums &middot; SafeTensors import
 </p>
 
 <p align="center">
@@ -20,64 +20,70 @@
 
 ---
 
-**.axon** is a binary model-weight container and runtime loader for AI models. It helps
-memory-limited machines — laptops, edge devices, home AI servers — load and run large
-models more efficiently by using memory mapping, partial tensor access, and
-SSD-backed caching.
+**.axon** is a binary model-weight container and runtime loader for AI models.
+It helps memory-limited machines, such as laptops, edge devices, and home AI
+servers, load large model weights with memory mapping, partial tensor access,
+and SSD-backed caching.
 
 ## What Axon Does
 
-- **Zero-copy tensor views via mmap** — `tensor_view()` returns a `&[u8]` slice
+- **Zero-copy tensor views via mmap**: `tensor_view()` returns a `&[u8]` slice
   directly into the memory-mapped file. No allocation, no copying. The OS pages
-  in tensor data from disk on first access.
-- **Fast model opening** — parse header + manifest + tensor index in ~30µs, regardless
-  of file size
-- **Partial tensor loading** — load only the rows or byte range you need
-- **SSD-backed execution** — keep model weights on SSD, cache only active tensors in RAM
-- **SSD-backed execution** — keep model weights on SSD, cache only active tensors in RAM
-- **LoRA adapter side-loading** — fast adapter switching without loading full models
-- **Tensor cache management** — LRU eviction, pinning, memory budget control
-- **Sharded model support** — models split across multiple files
+  tensor data from disk on first access.
+- **Fast model opening**: parse the header, manifest, and tensor index in
+  microseconds, regardless of file size.
+- **Partial tensor loading**: load only the rows or byte range needed by the
+  runtime.
+- **SSD-backed execution**: keep weights on SSD and cache only active tensors in
+  RAM.
+- **LoRA adapter side-loading**: switch adapters without loading full model
+  copies.
+- **Tensor cache management**: LRU eviction, pinning, and memory budget control.
+- **Sharded model support**: support models split across multiple files.
 
 ## What Axon Is Not
 
-Axon does **not** accelerate neural network training compute. Training speed depends
-on GPU compute, memory bandwidth, optimizer operations, and matrix multiplication.
+Axon is not a neural-network training framework and does not accelerate training
+compute. Training speed still depends on GPU compute, memory bandwidth, matrix
+multiplication kernels, and optimizer implementation.
+
 Axon improves:
 
-- Model loading and startup latency
-- Memory usage through lazy mmap and partial access
-- Tensor access through zero-copy views
-- Runtime deployment through caching and patching
-- Inference startup latency on memory-constrained hardware
+- model loading and startup latency
+- memory usage through lazy mmap and partial access
+- tensor access through zero-copy views
+- runtime deployment through caching and patching
+- inference startup latency on memory-constrained hardware
 
 The primary Axon value proposition:
 
-> Axon provides safe, mmap-backed, low-memory, partial-access tensor loading for runtime inference workloads.
+> Axon provides safe, mmap-backed, low-memory, partial-access tensor loading for
+> runtime inference workloads.
 
 Target environments:
 
-- Laptops
-- Mini PCs
+- laptops
+- mini PCs
 - Jetson and edge AI devices
 - Raspberry Pi-class systems
-- Local AI inference servers
-- Memory-constrained deployments
+- local AI inference servers
+- memory-constrained deployments
 
 ## Quick Start
 
 ```bash
-# Install via Rust
+# Build the Rust workspace
 cargo build --release
 
-# Create a test model with 17 tensors
+# Create a synthetic test model with 17 tensors
 ./target/release/axon create --model "MyModel-7B" --architecture llama model.axon
 
-# Inspect it
+# Inspect and validate it
 ./target/release/axon inspect model.axon
+./target/release/axon validate model.axon
 
-# Open with the runtime (zero-copy mmap, no tensor data loaded)
-./target/release/axon runtime open model.axon
+# Open with the runtime inspection path. No tensor bytes are loaded up front.
+./target/release/axon runtime inspect model.axon
 ```
 
 ```rust
@@ -85,31 +91,76 @@ use axon_runtime::AxonRuntime;
 
 let rt = AxonRuntime::open("model.axon")?;
 
-// Zero-copy view — no allocation, no copying, direct mmap slice
+// Zero-copy view: no allocation, no copying, direct mmap slice.
 let view: &[u8] = rt.tensor_view("emb_weight")?;
 
-// Shape-aware row slicing — maps only the requested rows
+// Shape-aware row slicing: maps only the requested rows.
 let rows: &[u8] = rt.tensor_rows("emb_weight", 0, 128)?;
 
-// Owned copy (outlives the runtime)
+// Owned copy that can outlive the runtime.
 let data: Vec<u8> = rt.tensor("emb_weight")?;
 ```
 
+## Python Bindings
+
+```bash
+cargo build --release -p axon-ffi
+pip install -e ./python
+python examples/python_example.py model.axon
+```
+
+To build Python distribution artifacts:
+
+```bash
+python -m pip install build
+python -m build ./python
+```
+
+```python
+import axon
+
+model = axon.load("model.axon")
+print(model.summary())
+tensor = model.tensor("emb_weight")
+```
+
+The Python package uses the native FFI library when available and keeps a
+pure-Python fallback for basic loading workflows.
+
+## C FFI
+
+```c
+#include "axon.h"
+
+AxonHandle* handle = axon_open("model.axon");
+if (!handle) {
+    char err[256];
+    axon_last_error(err, sizeof(err));
+    return 1;
+}
+
+uint64_t count = axon_tensor_count(handle);
+axon_close(handle);
+```
+
+Pointers returned by the FFI borrow from the mapped file and remain valid only
+while the `AxonHandle` is open.
+
 ## Performance
 
-Benchmarked on a ~100MB synthetic model (100 tensors, 1MB each):
+Benchmarked on a synthetic model with 100 tensors of 1 MB each:
 
 | Operation | Time |
-|---|---|
-| Open (parse metadata) | **~29µs** |
-| First tensor access | **~183ns** (offset math, OS handles page faults) |
-| Sequential access (100 tensors) | **~498µs** |
-| Partial load (4KB of 1MB tensor) | **~1.15µs** |
-| Full load (1MB tensor) | **~144µs** |
+|---|---:|
+| Open (parse metadata) | ~29 us |
+| First tensor access | ~183 ns |
+| Sequential access (100 tensors) | ~498 us |
+| Partial load (4 KB of 1 MB tensor) | ~1.15 us |
+| Full load (1 MB tensor) | ~144 us |
 
-**Key insight:** The runtime does not load tensor data during `open()`. Only the
-header (64 bytes), manifest (a few KB), and tensor descriptors (192 bytes each) are
-parsed. Individual tensor bytes are faulted in from disk by the OS on first access.
+Key insight: the runtime does not load tensor data during `open()`. Only the
+header, manifest, and tensor descriptors are parsed. Individual tensor bytes are
+faulted in from disk by the operating system on first access.
 
 ## Runtime Architecture
 
@@ -117,17 +168,18 @@ Axon has two layers:
 
 | Crate | Purpose | Memory model |
 |---|---|---|
-| `core/` | Format library: parse, write, validate, convert | Loads into `Vec<u8>` (safe, simple) |
-| `runtime/` | Execution layer: mmap, cache, partial load, LoRA | Borrows from mmap (zero-copy, lazy) |
+| `core/` | Format library: parse, write, validate, convert | Loads into `Vec<u8>` |
+| `runtime/` | Execution layer: mmap, cache, partial load, LoRA | Borrows from mmap |
 
-The runtime is the recommended path for inference. The core format library is the
-stable base used by the CLI, FFI, and Python bindings.
+The runtime is the recommended path for inference. The core format library is
+the stable base used by the CLI, FFI, and Python bindings.
 
-See **[docs/runtime-architecture.md](docs/runtime-architecture.md)** for the full design.
+See [docs/runtime-architecture.md](docs/runtime-architecture.md) for the full
+design.
 
 ## Project Structure
 
-```
+```text
 axon/
 ├── core/              # Core format library (Rust)
 ├── runtime/           # SSD-backed lazy runtime (Rust)
@@ -142,24 +194,28 @@ axon/
 
 ## CLI Reference
 
-```
+```text
 axon create      Create a synthetic .axon file for testing
 axon inspect     Show file structure and tensor list
 axon validate    Verify structure and checksums
 axon list        List all tensors
 axon extract     Extract a single tensor by name
 axon unpack      Extract all tensors to .npy or .bin files
-axon pack        Pack tensors from a manifest + data directory
+axon pack        Pack tensors from a manifest and data directory
 axon convert     Export manifest as JSON
 axon bench       Benchmark load/index performance
-axon runtime     Runtime subcommands (open, tensor, stats)
+axon runtime     Runtime subcommands: inspect, tensor, slice, stats, bench
 ```
 
 ## Documentation
 
-- **[docs/spec.md](docs/spec.md)** — Binary format specification
-- **[docs/runtime-architecture.md](docs/runtime-architecture.md)** — Runtime design
-- **[docs/usage.md](docs/usage.md)** — CLI, Python, and C FFI usage
+- [docs/spec.md](docs/spec.md): binary format specification
+- [docs/format-versioning.md](docs/format-versioning.md): compatibility and
+  versioning policy
+- [docs/runtime-architecture.md](docs/runtime-architecture.md): runtime design
+- [docs/usage.md](docs/usage.md): CLI, Python, and C FFI usage
+- [CONTRIBUTING.md](CONTRIBUTING.md): development workflow and quality gates
+- [CHANGELOG.md](CHANGELOG.md): release history and unreleased changes
 
 ## License
 

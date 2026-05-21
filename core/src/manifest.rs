@@ -1,8 +1,8 @@
-use std::collections::HashMap;
-use serde::{Deserialize, Serialize};
 use crate::error::{AxonError, AxonResult};
-use crate::tensor::TensorDescriptor;
 use crate::header::AxonHeader;
+use crate::tensor::TensorDescriptor;
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Manifest {
@@ -46,9 +46,15 @@ pub struct PatchInfo {
 impl Manifest {
     pub fn new() -> Self {
         Self {
-            model: None, architecture: None, hyperparameters: HashMap::new(),
-            tokenizer: None, context_length: None, tensors: HashMap::new(),
-            tensor_order: Vec::new(), patches: Vec::new(), quantization: None,
+            model: None,
+            architecture: None,
+            hyperparameters: HashMap::new(),
+            tokenizer: None,
+            context_length: None,
+            tensors: HashMap::new(),
+            tensor_order: Vec::new(),
+            patches: Vec::new(),
+            quantization: None,
         }
     }
 
@@ -62,19 +68,31 @@ impl Manifest {
         self.tensors.get(name)
     }
 
-    pub fn to_json_bytes(&self) -> AxonResult<Vec<u8>> { Ok(serde_json::to_vec_pretty(self)?) }
-    pub fn from_json_bytes(bytes: &[u8]) -> AxonResult<Self> { Ok(serde_json::from_slice(bytes)?) }
-    pub fn tensor_count(&self) -> u64 { self.tensors.len() as u64 }
+    pub fn to_json_bytes(&self) -> AxonResult<Vec<u8>> {
+        Ok(serde_json::to_vec_pretty(self)?)
+    }
+    pub fn from_json_bytes(bytes: &[u8]) -> AxonResult<Self> {
+        Ok(serde_json::from_slice(bytes)?)
+    }
+    pub fn tensor_count(&self) -> u64 {
+        self.tensors.len() as u64
+    }
 
     pub fn validate(&self) -> AxonResult<()> {
         if self.tensors.is_empty() {
-            return Err(AxonError::InvalidManifest("Manifest must contain at least one tensor".into()));
+            return Err(AxonError::InvalidManifest(
+                "Manifest must contain at least one tensor".into(),
+            ));
         }
         Ok(())
     }
 }
 
-impl Default for Manifest { fn default() -> Self { Self::new() } }
+impl Default for Manifest {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 pub struct AxonFile {
     pub header: AxonHeader,
@@ -88,7 +106,10 @@ impl AxonFile {
         let manifest_start = header.manifest_offset as usize;
         let manifest_end = manifest_start + header.manifest_size as usize;
         if manifest_end > data.len() {
-            return Err(AxonError::UnexpectedEof { needed: manifest_end as u64, available: data.len() as u64 });
+            return Err(AxonError::UnexpectedEof {
+                needed: manifest_end as u64,
+                available: data.len() as u64,
+            });
         }
         let mut manifest = Manifest::from_json_bytes(&data[manifest_start..manifest_end])?;
         let tdt_start = AxonHeader::align_up(header.manifest_offset + header.manifest_size, 64);
@@ -96,20 +117,30 @@ impl AxonFile {
         if (tdt_end as usize) <= data.len() {
             let mut cursor = tdt_start as usize;
             for _ in 0..header.tensor_count {
-                if cursor + TensorDescriptor::SIZE > data.len() { break; }
+                if cursor + TensorDescriptor::SIZE > data.len() {
+                    break;
+                }
                 let desc = TensorDescriptor::from_bytes(&data[cursor..])?;
                 cursor += TensorDescriptor::SIZE;
                 manifest.add_tensor(desc);
             }
         }
-        Ok(Self { header, manifest, data })
+        Ok(Self {
+            header,
+            manifest,
+            data,
+        })
     }
 
     pub fn tensor_data(&self, name: &str) -> Option<&[u8]> {
         let desc = self.manifest.get_tensor(name)?;
         let start = desc.data_offset as usize;
         let end = start + desc.data_size as usize;
-        if end <= self.data.len() { Some(&self.data[start..end]) } else { None }
+        if end <= self.data.len() {
+            Some(&self.data[start..end])
+        } else {
+            None
+        }
     }
 
     pub fn verify_all_checksums(&self) -> Vec<(String, bool)> {
@@ -117,8 +148,13 @@ impl AxonFile {
         for (name, desc) in &self.manifest.tensors {
             if desc.checksum != 0 {
                 if let Some(data) = self.tensor_data(name) {
-                    results.push((name.clone(), crate::checksum::verify_checksum(data, desc.checksum)));
-                } else { results.push((name.clone(), false)); }
+                    results.push((
+                        name.clone(),
+                        crate::checksum::verify_checksum(data, desc.checksum),
+                    ));
+                } else {
+                    results.push((name.clone(), false));
+                }
             }
         }
         results

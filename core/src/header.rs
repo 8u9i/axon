@@ -22,7 +22,6 @@ use crate::{AXON_MAGIC, AXON_VERSION, CACHE_LINE_SIZE};
 /// | 56     | 8    | flags              | Bit flags for format features            |
 ///
 /// Total: 64 bytes = 1 cache line.
-
 #[repr(C, align(64))]
 #[derive(Debug, Clone, Copy)]
 pub struct AxonHeader {
@@ -136,7 +135,17 @@ impl AxonHeader {
         let payload_size = cursor.read_u64::<LittleEndian>()?;
         let checksum = cursor.read_u64::<LittleEndian>()?;
         let flags = cursor.read_u64::<LittleEndian>()?;
-        let header = Self { magic, version, manifest_offset, manifest_size, tensor_count, payload_offset, payload_size, checksum, flags };
+        let header = Self {
+            magic,
+            version,
+            manifest_offset,
+            manifest_size,
+            tensor_count,
+            payload_offset,
+            payload_size,
+            checksum,
+            flags,
+        };
         header.validate()?;
         Ok(header)
     }

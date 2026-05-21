@@ -6,7 +6,12 @@ use axon_core::*;
 
 /// Helper: build a minimal .axon file with a single FP32 tensor.
 fn build_single_tensor_axon() -> Vec<u8> {
-    let data = vec![1.0f32.to_bits(), 2.0f32.to_bits(), 3.0f32.to_bits(), 4.0f32.to_bits()];
+    let data = [
+        1.0f32.to_bits(),
+        2.0f32.to_bits(),
+        3.0f32.to_bits(),
+        4.0f32.to_bits(),
+    ];
     let bytes: Vec<u8> = data.iter().flat_map(|x| x.to_le_bytes()).collect();
     AxonBuilder::new()
         .model("test-model")
@@ -37,7 +42,10 @@ fn test_tensor_count_and_names() {
 fn test_tensor_descriptor_values() {
     let axon_data = build_single_tensor_axon();
     let file = AxonFile::from_bytes(axon_data).expect("Failed to parse");
-    let desc = file.manifest.get_tensor("weights").expect("Tensor not found");
+    let desc = file
+        .manifest
+        .get_tensor("weights")
+        .expect("Tensor not found");
     assert_eq!(desc.name_str(), "weights", "Tensor name should match");
     assert!(desc.dtype().is_ok(), "dtype should parse");
     assert_eq!(desc.dtype().unwrap(), DType::F32, "dtype should be F32");
@@ -58,8 +66,14 @@ fn test_tensor_data_integrity() {
     // Read back the floats
     use byteorder::{LittleEndian, ReadBytesExt};
     let mut cursor = std::io::Cursor::new(tensor_bytes);
-    let values: Vec<f32> = (0..4).map(|_| cursor.read_f32::<LittleEndian>().unwrap()).collect();
-    assert_eq!(values, vec![1.0, 2.0, 3.0, 4.0], "Tensor data should match input");
+    let values: Vec<f32> = (0..4)
+        .map(|_| cursor.read_f32::<LittleEndian>().unwrap())
+        .collect();
+    assert_eq!(
+        values,
+        vec![1.0, 2.0, 3.0, 4.0],
+        "Tensor data should match input"
+    );
 }
 
 #[test]
@@ -76,7 +90,6 @@ fn test_checksum_detects_corruption() {
     let axon_data = build_single_tensor_axon();
     // Parse to find the offset
     let file = AxonFile::from_bytes(axon_data.clone()).expect("initial parse");
-    let payload_start = file.header.payload_offset as usize;
     // Corruption in the data area of the first tensor
     let desc = file.manifest.get_tensor("weights").unwrap();
     let corrupt_offset = desc.data_offset as usize + desc.data_size as usize - 1;
@@ -89,12 +102,14 @@ fn test_checksum_detects_corruption() {
     let file2 = AxonFile::from_bytes(corrupted).expect("Failed to parse (still should parse)");
     let results = file2.verify_all_checksums();
     assert_eq!(results.len(), 1, "Should have 1 checksum result");
-    assert!(!results[0].1, "Corrupted data should fail checksum verification");
+    assert!(
+        !results[0].1,
+        "Corrupted data should fail checksum verification"
+    );
 }
 
 #[test]
 fn test_header_alignment() {
-    let header = AxonHeader::default();
     // Verify align_up utility
     assert_eq!(AxonHeader::align_up(0, 64), 0);
     assert_eq!(AxonHeader::align_up(1, 64), 64);
@@ -115,7 +130,10 @@ fn test_dtype_roundtrip() {
 #[test]
 fn test_invalid_dtype() {
     assert!(DType::from_code(99).is_err(), "Code 99 should be invalid");
-    assert!(DType::from_code(u32::MAX).is_err(), "Max u32 should be invalid");
+    assert!(
+        DType::from_code(u32::MAX).is_err(),
+        "Max u32 should be invalid"
+    );
 }
 
 #[test]
@@ -152,18 +170,31 @@ fn test_large_model_multiple_tensors() {
     let axon_data = builder.build().expect("Failed to build multi-tensor .axon");
     let file = AxonFile::from_bytes(axon_data).expect("Failed to parse");
     assert_eq!(file.header.tensor_count, 10, "Should have 10 tensors");
-    assert_eq!(file.manifest.tensor_order.len(), 10, "Manifest should list 10 tensors");
+    assert_eq!(
+        file.manifest.tensor_order.len(),
+        10,
+        "Manifest should list 10 tensors"
+    );
 
     // Verify all tensors are accessible
     for name in &file.manifest.tensor_order {
-        assert!(file.manifest.get_tensor(name).is_some(), "Tensor {name} should exist");
-        assert!(file.tensor_data(name).is_some(), "Data for {name} should be accessible");
+        assert!(
+            file.manifest.get_tensor(name).is_some(),
+            "Tensor {name} should exist"
+        );
+        assert!(
+            file.tensor_data(name).is_some(),
+            "Data for {name} should be accessible"
+        );
     }
 
     // All checksums should pass
     let results = file.verify_all_checksums();
     assert_eq!(results.len(), 10, "All 10 tensors should have checksums");
-    assert!(results.iter().all(|(_, ok)| *ok), "All checksums should pass");
+    assert!(
+        results.iter().all(|(_, ok)| *ok),
+        "All checksums should pass"
+    );
 }
 
 #[test]
@@ -188,7 +219,10 @@ fn test_empty_tensor_rejected() {
             .add_tensor("empty", Vec::new(), DType::F32, &[0])
             .build()
     });
-    assert!(result.is_err() || result.is_ok(), "Building with empty tensor may panic or return error");
+    assert!(
+        result.is_err() || result.is_ok(),
+        "Building with empty tensor may panic or return error"
+    );
 }
 
 #[test]
@@ -204,7 +238,11 @@ fn test_tensor_alignment() {
     let desc = file.manifest.get_tensor("odd_sized").unwrap();
 
     // Data offset should be 64-byte aligned
-    assert_eq!(desc.data_offset % 64, 0, "Tensor data offset should be 64-byte aligned");
+    assert_eq!(
+        desc.data_offset % 64,
+        0,
+        "Tensor data offset should be 64-byte aligned"
+    );
 }
 
 #[test]
@@ -236,7 +274,11 @@ fn test_serialize_deserialize_tensor_descriptor() {
         0xDEADBEEF,
     );
     let bytes = desc.to_bytes().expect("Serialize failed");
-    assert_eq!(bytes.len(), 192, "Serialized descriptor should be 192 bytes");
+    assert_eq!(
+        bytes.len(),
+        192,
+        "Serialized descriptor should be 192 bytes"
+    );
 
     let restored = TensorDescriptor::from_bytes(&bytes).expect("Deserialize failed");
     assert_eq!(desc.name_str(), restored.name_str());
@@ -259,8 +301,15 @@ fn test_payload_offset_calculation() {
     //   - manifest (variable)
     //   - TDT (1 tensor * 192 bytes + padding)
     // All aligned to 64 bytes
-    assert!(file.header.payload_offset >= 4096, "Payload should start after HOT_START");
-    assert_eq!(file.header.payload_offset % 64, 0, "Payload should be 64-byte aligned");
+    assert!(
+        file.header.payload_offset >= 4096,
+        "Payload should start after HOT_START"
+    );
+    assert_eq!(
+        file.header.payload_offset % 64,
+        0,
+        "Payload should be 64-byte aligned"
+    );
 }
 
 #[test]
@@ -274,7 +323,10 @@ fn test_multiple_tensor_order_preserved() {
     let file = AxonFile::from_bytes(axon_data).expect("Parse failed");
 
     // Tensor order should be lexicographic (alphabetical)
-    assert_eq!(file.manifest.tensor_order, vec!["a_first", "b_second", "m_middle", "z_last"]);
+    assert_eq!(
+        file.manifest.tensor_order,
+        vec!["a_first", "b_second", "m_middle", "z_last"]
+    );
 }
 
 #[test]
@@ -289,12 +341,16 @@ fn test_tensor_data_random_access() {
     let file = AxonFile::from_bytes(axon_data).expect("Parse failed");
 
     // Random access: get tensor_0050's data
-    let data_50 = file.tensor_data("tensor_0050").expect("tensor_0050 not found");
+    let data_50 = file
+        .tensor_data("tensor_0050")
+        .expect("tensor_0050 not found");
     assert_eq!(data_50[0], (50 * 64) as u8, "First byte should match");
     assert_eq!(data_50[63], (50 * 64 + 63) as u8, "Last byte should match");
 
     // Get tensor_0000
-    let data_0 = file.tensor_data("tensor_0000").expect("tensor_0000 not found");
+    let data_0 = file
+        .tensor_data("tensor_0000")
+        .expect("tensor_0000 not found");
     assert_eq!(data_0[0], 0, "First byte should be 0");
 }
 
@@ -323,7 +379,6 @@ fn test_truncated_read_still_parses() {
 
 #[test]
 fn test_mmap_open() {
-    use std::env;
     let path = std::path::Path::new("output");
     let _ = std::fs::create_dir_all(path);
     let test_path = path.join("test_mmap.axon");
@@ -361,9 +416,16 @@ fn test_multiple_dtypes_in_single_file() {
 
     let axon_data = builder.build().expect("Build failed");
     let file = AxonFile::from_bytes(axon_data).expect("Parse failed");
-    assert_eq!(file.manifest.tensor_count(), 6, "Should have 6 tensors with different dtypes");
+    assert_eq!(
+        file.manifest.tensor_count(),
+        6,
+        "Should have 6 tensors with different dtypes"
+    );
 
     // All checksums pass
     let results = file.verify_all_checksums();
-    assert!(results.iter().all(|(_, ok)| *ok), "All mixed-precision checksums should pass");
+    assert!(
+        results.iter().all(|(_, ok)| *ok),
+        "All mixed-precision checksums should pass"
+    );
 }

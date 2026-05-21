@@ -1,5 +1,8 @@
 # .axon Specification v1.0
 
+See [format-versioning.md](format-versioning.md) for reader/writer
+compatibility rules and the policy for future format versions.
+
 **Adaptive eXecutable Object Notation** — a binary-first, hardware-aligned container format for machine learning model weights.
 
 - **Zero-copy loading**: 64-byte aligned for direct mmap into GPU/NPU address space

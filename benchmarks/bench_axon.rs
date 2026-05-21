@@ -5,9 +5,9 @@
 //!   or
 //!   ./target/release/examples/bench_axon model.axon
 
+use axon_runtime::AxonRuntime;
 use std::fs;
 use std::time::Instant;
-use axon_runtime::AxonRuntime;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = std::env::args().collect();
@@ -38,7 +38,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let t0 = Instant::now();
     let _view = rt.tensor_view(first)?;
     let first_access = t0.elapsed();
-    println!("\n[First tensor access] {} ({})", first, first_access.as_secs_f64() * 1000.0);
+    println!(
+        "\n[First tensor access] {} ({})",
+        first,
+        first_access.as_secs_f64() * 1000.0
+    );
 
     // ── Random tensor access ──
     let idx = names.len() / 2;
@@ -46,7 +50,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let t0 = Instant::now();
     let _view = rt.tensor_view(mid)?;
     let random_access = t0.elapsed();
-    println!("\n[Random tensor access] {} ({})", mid, random_access.as_secs_f64() * 1000.0);
+    println!(
+        "\n[Random tensor access] {} ({})",
+        mid,
+        random_access.as_secs_f64() * 1000.0
+    );
 
     // ── 100 random accesses ──
     let indices: Vec<usize> = (0..100.min(names.len())).collect();
@@ -55,7 +63,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let _ = rt.tensor_view(names[i])?;
     }
     let hundred_access = t0.elapsed();
-    println!("\n[100 tensor accesses] {:.2?} ({:.3?} avg)", hundred_access, hundred_access / 100);
+    println!(
+        "\n[100 tensor accesses] {:.2?} ({:.3?} avg)",
+        hundred_access,
+        hundred_access / 100
+    );
 
     // ── Full tensor scan ──
     let t0 = Instant::now();
@@ -66,7 +78,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let total = vtensor_total_bytes(&rt);
     let throughput = total as f64 / full_scan.as_secs_f64() / (1024.0 * 1024.0 * 1024.0);
     println!("\n[Full tensor scan] {:.2?}", full_scan);
-    println!("  Total accessed: {:.2} MB", total as f64 / (1024.0 * 1024.0));
+    println!(
+        "  Total accessed: {:.2} MB",
+        total as f64 / (1024.0 * 1024.0)
+    );
     println!("  Throughput: {:.2} GB/s", throughput);
 
     // ── Partial tensor access ──
@@ -77,7 +92,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let t0 = Instant::now();
             let _view = rt.tensor_byte_view(name, 0..slice_size as usize)?;
             let partial_time = t0.elapsed();
-            println!("\n[Partial tensor access] {:.2?} ({} bytes)", partial_time, slice_size);
+            println!(
+                "\n[Partial tensor access] {:.2?} ({} bytes)",
+                partial_time, slice_size
+            );
         }
     }
 
@@ -88,7 +106,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let t0 = Instant::now();
                 let _rows = rt.tensor_rows(name, 0, 2)?;
                 let row_time = t0.elapsed();
-                println!("\n[Row access] {} (rows 0..2 of {}x{})", name, info.shape[0], info.shape[1]);
+                println!(
+                    "\n[Row access] {} (rows 0..2 of {}x{})",
+                    name, info.shape[0], info.shape[1]
+                );
                 println!("  Time: {:.2?}", row_time);
                 break;
             }

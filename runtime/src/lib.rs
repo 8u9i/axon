@@ -33,15 +33,15 @@
 //! println!("DType: {}, Shape: {:?}", info.dtype.name(), info.shape);
 //! ```
 
+pub mod lora;
 mod mmap_store;
+pub mod paging;
 mod runtime;
 mod slice;
-pub mod tensor_cache;
 mod stats;
-pub mod lora;
-pub mod paging;
+pub mod tensor_cache;
 
 pub use mmap_store::MmapStore;
-pub use runtime::{AxonRuntime, CachedRuntime, TensorInfo, TensorAccess};
+pub use runtime::{AxonRuntime, CachedRuntime, TensorAccess, TensorInfo};
 pub use slice::{SliceSpec, TensorSlice};
 pub use stats::RuntimeStats;

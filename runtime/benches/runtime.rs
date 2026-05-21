@@ -23,7 +23,7 @@ use std::fs;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use axon_core::{AxonFile, AxonBuilder, DType};
+use axon_core::{AxonBuilder, AxonFile, DType};
 use axon_runtime::AxonRuntime;
 
 fn test_dir() -> PathBuf {
@@ -35,7 +35,9 @@ fn test_dir() -> PathBuf {
 /// Generate a synthetic .axon file with N tensors, each of `tensor_size` bytes.
 fn generate_model(path: &PathBuf, tensor_count: usize, tensor_size: usize) {
     let data: Vec<u8> = (0..tensor_size).map(|i| i as u8).collect();
-    let mut builder = AxonBuilder::new().model("bench-model").architecture("bench");
+    let mut builder = AxonBuilder::new()
+        .model("bench-model")
+        .architecture("bench");
 
     for i in 0..tensor_count {
         let name = format!("layer_{}_weight", i);
@@ -70,7 +72,9 @@ fn bench_first_tensor(rt: &AxonRuntime) -> Duration {
 
 fn bench_first_tensor_fallback(file: &AxonFile) -> Duration {
     let start = Instant::now();
-    let _data = file.tensor_data("layer_0_weight").expect("Failed to get tensor");
+    let _data = file
+        .tensor_data("layer_0_weight")
+        .expect("Failed to get tensor");
     start.elapsed()
 }
 
@@ -94,7 +98,9 @@ fn bench_all_tensors(rt: &AxonRuntime) -> Duration {
 
 fn bench_byte_range(rt: &AxonRuntime, name: &str, offset: u64, size: u64) -> Duration {
     let start = Instant::now();
-    let _data = rt.tensor_byte_range(name, offset, size).expect("Failed to get byte range");
+    let _data = rt
+        .tensor_byte_range(name, offset, size)
+        .expect("Failed to get byte range");
     start.elapsed()
 }
 
@@ -107,7 +113,7 @@ fn bench_full_tensor(rt: &AxonRuntime, name: &str) -> Duration {
 // ── Test configurations ────────────────────────────────────────────
 
 const SMALL_COUNT: usize = 10;
-const SMALL_SIZE: usize = 1024;       // 1KB per tensor, ~10MB total
+const SMALL_SIZE: usize = 1024; // 1KB per tensor, ~10MB total
 const MEDIUM_COUNT: usize = 100;
 const MEDIUM_SIZE: usize = 1024 * 32; // 32KB per tensor, ~3.2MB total
 const LARGE_COUNT: usize = 100;
@@ -127,9 +133,18 @@ fn main() {
     generate_model(&large_path, LARGE_COUNT, LARGE_SIZE);
 
     println!("Test files ready:");
-    println!("  Small:  {} tensors, {} bytes each", SMALL_COUNT, SMALL_SIZE);
-    println!("  Medium: {} tensors, {} bytes each", MEDIUM_COUNT, MEDIUM_SIZE);
-    println!("  Large:  {} tensors, {} bytes each", LARGE_COUNT, LARGE_SIZE);
+    println!(
+        "  Small:  {} tensors, {} bytes each",
+        SMALL_COUNT, SMALL_SIZE
+    );
+    println!(
+        "  Medium: {} tensors, {} bytes each",
+        MEDIUM_COUNT, MEDIUM_SIZE
+    );
+    println!(
+        "  Large:  {} tensors, {} bytes each",
+        LARGE_COUNT, LARGE_SIZE
+    );
     println!();
 
     // ── Benchmark 1: Open time ────────────────────────────────────
@@ -149,7 +164,10 @@ fn main() {
         times.push(bench_open(&small_path));
     }
     let avg = times.iter().sum::<Duration>() / ITERATIONS;
-    println!("| Runtime | Small ({} tensors) | Open time | {:>12?} |", SMALL_COUNT, avg);
+    println!(
+        "| Runtime | Small ({} tensors) | Open time | {:>12?} |",
+        SMALL_COUNT, avg
+    );
 
     // Medium model
     let mut times = Vec::new();
@@ -157,7 +175,10 @@ fn main() {
         times.push(bench_open(&medium_path));
     }
     let avg = times.iter().sum::<Duration>() / ITERATIONS;
-    println!("| Runtime | Medium ({} tensors) | Open time | {:>12?} |", MEDIUM_COUNT, avg);
+    println!(
+        "| Runtime | Medium ({} tensors) | Open time | {:>12?} |",
+        MEDIUM_COUNT, avg
+    );
 
     // Large model
     let mut times = Vec::new();
@@ -165,7 +186,10 @@ fn main() {
         times.push(bench_open(&large_path));
     }
     let avg = times.iter().sum::<Duration>() / ITERATIONS;
-    println!("| Runtime | Large ({} tensors) | Open time | {:>12?} |", LARGE_COUNT, avg);
+    println!(
+        "| Runtime | Large ({} tensors) | Open time | {:>12?} |",
+        LARGE_COUNT, avg
+    );
 
     // ── Benchmark 2: Runtime open vs fallback ─────────────────────
     println!("\n---");
@@ -256,8 +280,12 @@ fn main() {
         seq_times.push(bench_all_tensors(&rt_med));
     }
     let seq_avg = seq_times.iter().sum::<Duration>() / seq_times.len() as u32;
-    println!("| Runtime | {} tensors ({}MB total) | {:>12?} |",
-             MEDIUM_COUNT, (MEDIUM_COUNT * MEDIUM_SIZE) / (1024 * 1024), seq_avg);
+    println!(
+        "| Runtime | {} tensors ({}MB total) | {:>12?} |",
+        MEDIUM_COUNT,
+        (MEDIUM_COUNT * MEDIUM_SIZE) / (1024 * 1024),
+        seq_avg
+    );
 
     // ── Summary ───────────────────────────────────────────────────
     println!("\n---");
@@ -269,7 +297,22 @@ fn main() {
 
     println!("| File | Size | Tensors | Tensor Size |");
     println!("|------|------|---------|-------------|");
-    println!("| Small  | {} bytes | {} | {} bytes |", small_meta.len(), SMALL_COUNT, SMALL_SIZE);
-    println!("| Medium | {} bytes | {} | {} bytes |", medium_meta.len(), MEDIUM_COUNT, MEDIUM_SIZE);
-    println!("| Large  | {} bytes | {} | {} bytes |", large_meta.len(), LARGE_COUNT, LARGE_SIZE);
+    println!(
+        "| Small  | {} bytes | {} | {} bytes |",
+        small_meta.len(),
+        SMALL_COUNT,
+        SMALL_SIZE
+    );
+    println!(
+        "| Medium | {} bytes | {} | {} bytes |",
+        medium_meta.len(),
+        MEDIUM_COUNT,
+        MEDIUM_SIZE
+    );
+    println!(
+        "| Large  | {} bytes | {} | {} bytes |",
+        large_meta.len(),
+        LARGE_COUNT,
+        LARGE_SIZE
+    );
 }

@@ -3,6 +3,9 @@
 **/output/
 __pycache__/
 *.pyc
+*.egg-info/
+dist/
+build/
 *.so
 *.dylib
 *.dll

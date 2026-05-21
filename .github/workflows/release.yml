@@ -1,0 +1,112 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build-native:
+    name: Native artifacts (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            artifact-name: axon-linux-x86_64
+            archive-name: axon-linux-x86_64.tar.gz
+          - os: macos-latest
+            artifact-name: axon-macos-arm64
+            archive-name: axon-macos-arm64.tar.gz
+          - os: windows-latest
+            artifact-name: axon-windows-x86_64
+            archive-name: axon-windows-x86_64.zip
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build release binaries
+        run: cargo build --release --workspace
+
+      - name: Stage Unix artifacts
+        if: runner.os != 'Windows'
+        run: |
+          mkdir -p dist/${{ matrix.artifact-name }}
+          cp target/release/axon dist/${{ matrix.artifact-name }}/
+          cp target/release/libaxon_ffi.* dist/${{ matrix.artifact-name }}/ 2>/dev/null || true
+          cp README.md LICENSE-MIT LICENSE-APACHE dist/${{ matrix.artifact-name }}/
+          tar -czf dist/${{ matrix.archive-name }} -C dist ${{ matrix.artifact-name }}
+
+      - name: Stage Windows artifacts
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path "dist/${{ matrix.artifact-name }}" | Out-Null
+          Copy-Item target/release/axon.exe "dist/${{ matrix.artifact-name }}/"
+          Copy-Item target/release/axon_ffi.dll "dist/${{ matrix.artifact-name }}/" -ErrorAction SilentlyContinue
+          Copy-Item README.md,LICENSE-MIT,LICENSE-APACHE "dist/${{ matrix.artifact-name }}/"
+          Compress-Archive -Path "dist/${{ matrix.artifact-name }}" -DestinationPath "dist/${{ matrix.archive-name }}"
+
+      - name: Upload native artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.archive-name }}
+          path: dist/${{ matrix.archive-name }}
+          if-no-files-found: error
+
+  build-python:
+    name: Python sdist and wheel
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Build Python distributions
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install build
+          python -m build ./python
+
+      - name: Upload Python artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: axon-python-dist
+          path: python/dist/*
+          if-no-files-found: error
+
+  publish-release:
+    name: Publish GitHub release
+    needs: [build-native, build-python]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: release-artifacts
+
+      - name: Publish release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" \
+            --title "${GITHUB_REF_NAME}" \
+            --notes "Axon release ${GITHUB_REF_NAME}" \
+            release-artifacts/**/*

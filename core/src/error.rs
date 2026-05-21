@@ -18,7 +18,11 @@ pub enum AxonError {
     AlignmentError { offset: u64, alignment: u64 },
 
     #[error("Checksum mismatch for tensor `{name}`: expected {expected:#x}, got {actual:#x}")]
-    ChecksumMismatch { name: String, expected: u64, actual: u64 },
+    ChecksumMismatch {
+        name: String,
+        expected: u64,
+        actual: u64,
+    },
 
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),

@@ -24,7 +24,7 @@
 //! added later via a `layout` parameter.
 
 use axon_core::AxonError;
-use axon_core::{DType, AxonResult};
+use axon_core::{AxonResult, DType};
 
 /// Specifies which portion of a tensor to load.
 ///
@@ -33,16 +33,10 @@ use axon_core::{DType, AxonResult};
 #[derive(Debug, Clone)]
 pub enum SliceSpec {
     /// Load a contiguous byte range: `[byte_offset, byte_offset + size)`.
-    Bytes {
-        byte_offset: u64,
-        size: u64,
-    },
+    Bytes { byte_offset: u64, size: u64 },
     /// Load contiguous rows from a 2D tensor.
     /// `row_start` is inclusive, `row_end` is exclusive.
-    Rows {
-        row_start: u64,
-        row_end: u64,
-    },
+    Rows { row_start: u64, row_end: u64 },
     /// Load a rectangular submatrix from a 2D tensor.
     /// All ranges are `[start, end)`.
     RowCol {
@@ -53,10 +47,7 @@ pub enum SliceSpec {
     },
     /// Load elements by offset and count.
     /// `element_offset` is the index of the first element (not byte).
-    Elements {
-        element_offset: u64,
-        count: u64,
-    },
+    Elements { element_offset: u64, count: u64 },
 }
 
 impl SliceSpec {
@@ -68,18 +59,32 @@ impl SliceSpec {
     /// Create a row-range slice for a 2D tensor.
     /// `start` is inclusive, `end` is exclusive.
     pub fn rows(start: u64, end: u64) -> Self {
-        SliceSpec::Rows { row_start: start, row_end: end }
+        SliceSpec::Rows {
+            row_start: start,
+            row_end: end,
+        }
     }
 
     /// Create a rectangular submatrix slice.
     pub fn row_col(row_start: u64, row_end: u64, col_start: u64, col_end: u64) -> Self {
-        SliceSpec::RowCol { row_start, row_end, col_start, col_end }
+        SliceSpec::RowCol {
+            row_start,
+            row_end,
+            col_start,
+            col_end,
+        }
     }
 
     /// Validate this spec against a tensor descriptor and compute the byte range.
     ///
     /// Returns `(byte_offset, byte_size)` if valid.
-    pub fn resolve(&self, dtype: DType, shape: &[u64], data_offset: u64, data_size: u64) -> AxonResult<(u64, u64)> {
+    pub fn resolve(
+        &self,
+        dtype: DType,
+        shape: &[u64],
+        data_offset: u64,
+        data_size: u64,
+    ) -> AxonResult<(u64, u64)> {
         let elem_size = dtype.size_in_bytes() as u64;
 
         match self {
@@ -95,9 +100,10 @@ impl SliceSpec {
 
             SliceSpec::Rows { row_start, row_end } => {
                 if shape.len() != 2 {
-                    return Err(AxonError::InvalidManifest(
-                        format!("Rows slice requires 2D tensor, got {}D", shape.len())
-                    ));
+                    return Err(AxonError::InvalidManifest(format!(
+                        "Rows slice requires 2D tensor, got {}D",
+                        shape.len()
+                    )));
                 }
                 let cols = shape[1];
                 let row_stride = cols * elem_size;
@@ -112,15 +118,25 @@ impl SliceSpec {
                 Ok((data_offset + byte_offset, size))
             }
 
-            SliceSpec::RowCol { row_start, row_end, col_start, col_end } => {
+            SliceSpec::RowCol {
+                row_start,
+                row_end,
+                col_start,
+                col_end,
+            } => {
                 if shape.len() != 2 {
-                    return Err(AxonError::InvalidManifest(
-                        format!("RowCol slice requires 2D tensor, got {}D", shape.len())
-                    ));
+                    return Err(AxonError::InvalidManifest(format!(
+                        "RowCol slice requires 2D tensor, got {}D",
+                        shape.len()
+                    )));
                 }
                 let cols = shape[1];
                 let row_stride = cols * elem_size;
-                if *row_end > shape[0] || *col_end > cols || *row_start > *row_end || *col_start > *col_end {
+                if *row_end > shape[0]
+                    || *col_end > cols
+                    || *row_start > *row_end
+                    || *col_start > *col_end
+                {
                     return Err(AxonError::UnexpectedEof {
                         needed: data_offset + row_stride * shape[0] + col_end * elem_size,
                         available: data_offset + data_size,
@@ -133,7 +149,10 @@ impl SliceSpec {
                 Ok((data_offset + byte_offset, size))
             }
 
-            SliceSpec::Elements { element_offset, count } => {
+            SliceSpec::Elements {
+                element_offset,
+                count,
+            } => {
                 let total_elements: u64 = shape.iter().product();
                 if element_offset + count > total_elements {
                     return Err(AxonError::UnexpectedEof {
@@ -175,36 +194,13 @@ impl TensorSlice {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use axon_core::{AxonBuilder, TensorDescriptor, Affinity};
-
-    fn make_2d_tensor(rows: u64, cols: u64) -> (Vec<u8>, Vec<u8>) {
-        let dtype = DType::F32;
-        let elem_size = dtype.size_in_bytes() as u64;
-        let total = (rows * cols * elem_size) as usize;
-        let data: Vec<u8> = (0..total).map(|i| i as u8).collect();
-        let _desc = TensorDescriptor::new(
-            "weights", dtype, &[rows, cols],
-            4096, total as u64, Affinity::Default, 0,
-        );
-
-        // Build a minimal .axon file and extract the raw data bytes
-        let axon = AxonBuilder::new()
-            .add_tensor("weights", data.clone(), dtype, &[rows, cols])
-            .build()
-            .unwrap();
-
-        // Parse it back to get correct offsets
-        let file = axon_core::AxonFile::from_bytes(axon).unwrap();
-        let raw = file.tensor_data("weights").unwrap().to_vec();
-
-        (raw.clone(), raw)
-    }
+    use axon_core::AxonBuilder;
 
     #[test]
     fn test_byte_range_resolve() {
         let spec = SliceSpec::byte_range(16, 32);
         let (offset, size) = spec.resolve(DType::F32, &[64, 64], 4096, 16384).unwrap();
-        assert_eq!(offset, 4112);  // 4096 + 16
+        assert_eq!(offset, 4112); // 4096 + 16
         assert_eq!(size, 32);
     }
 
@@ -232,7 +228,10 @@ mod tests {
 
     #[test]
     fn test_elements_resolve() {
-        let spec = SliceSpec::Elements { element_offset: 100, count: 50 };
+        let spec = SliceSpec::Elements {
+            element_offset: 100,
+            count: 50,
+        };
         let elem_size = DType::F32.size_in_bytes() as u64;
         let (offset, size) = spec.resolve(DType::F32, &[4096], 4096, 16384).unwrap();
         assert_eq!(offset, 4096 + 100 * elem_size);
@@ -256,9 +255,9 @@ mod tests {
     #[test]
     fn test_2d_slice_matches_full_values() {
         // Build an AxonRuntime and compare slice values against full load
+        use crate::AxonRuntime;
         use std::fs;
         use std::path::PathBuf;
-        use crate::AxonRuntime;
 
         let data: Vec<u8> = (0..256).map(|i| i as u8).collect();
         let dir = PathBuf::from("output");
@@ -279,9 +278,11 @@ mod tests {
         // to get (byte_offset_within_tensor, slice_size).
         let spec = SliceSpec::rows(4, 8);
         let (byte_offset_within_tensor, sz) = spec.resolve(DType::U8, &[16, 16], 0, 256).unwrap();
-        let sliced = rt.tensor_byte_range("mat", byte_offset_within_tensor, sz).unwrap();
-        assert_eq!(sliced.len(), 4 * 16);  // 4 rows × 16 cols
-        assert_eq!(&sliced, &full[4*16..8*16]);
+        let sliced = rt
+            .tensor_byte_range("mat", byte_offset_within_tensor, sz)
+            .unwrap();
+        assert_eq!(sliced.len(), 4 * 16); // 4 rows × 16 cols
+        assert_eq!(&sliced, &full[4 * 16..8 * 16]);
 
         // Clean up
         fs::remove_file(&path).ok();

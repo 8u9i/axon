@@ -85,7 +85,7 @@ impl Default for PagingConfig {
     fn default() -> Self {
         Self {
             page_size: DEFAULT_PAGE_SIZE,
-            max_pages: 1024,  // 4GB with 4MB pages
+            max_pages: 1024, // 4GB with 4MB pages
             prefetch_enabled: false,
             prefetch_ahead: 2,
         }
@@ -176,7 +176,7 @@ impl PagedRuntime {
     pub fn tensor(&mut self, name: &str) -> AxonResult<Vec<u8>> {
         let info = self.inner.tensor_info(name)?;
         let page_size = self.config.page_size;
-        let total_pages = (info.data_size + page_size - 1) / page_size;
+        let total_pages = info.data_size.div_ceil(page_size);
         let page_count = total_pages as usize;
 
         let page_key = |i: u64| -> (String, u64) { (name.to_string(), i) };
@@ -238,7 +238,7 @@ impl PagedRuntime {
         for name in names {
             let info = self.inner.tensor_info(name)?;
             let page_size = self.config.page_size;
-            let total_pages = (info.data_size + page_size - 1) / page_size;
+            let total_pages = info.data_size.div_ceil(page_size);
 
             for i in 0..total_pages {
                 let key = (name.to_string(), i);
@@ -273,14 +273,19 @@ impl PagedRuntime {
 
     /// Release a tensor from the page cache (hint to evict).
     pub fn release(&mut self, name: &str) {
-        let keys: Vec<(String, u64)> = self.pages.iter()
+        let keys: Vec<(String, u64)> = self
+            .pages
+            .iter()
             .filter(|(k, _)| k.0 == name)
             .map(|(k, _)| k.clone())
             .collect();
         for key in keys {
             if let Some(page) = self.pages.pop(&key) {
                 self.stats.evictions += 1;
-                self.stats.resident_bytes = self.stats.resident_bytes.saturating_sub(page.data.len() as u64);
+                self.stats.resident_bytes = self
+                    .stats
+                    .resident_bytes
+                    .saturating_sub(page.data.len() as u64);
             }
         }
         self.access_order.retain(|k| k.0 != name);
@@ -310,7 +315,10 @@ impl PagedRuntime {
         let lru = self.access_order.remove(0);
         if let Some(page) = self.pages.pop(&lru) {
             self.stats.evictions += 1;
-            self.stats.resident_bytes = self.stats.resident_bytes.saturating_sub(page.data.len() as u64);
+            self.stats.resident_bytes = self
+                .stats
+                .resident_bytes
+                .saturating_sub(page.data.len() as u64);
             self.stats.resident_pages = self.pages.len();
             true
         } else {
@@ -396,7 +404,11 @@ impl LayerRunner {
             let next_idx = self.current_index + i;
             if next_idx < self.layer_names.len() {
                 let next_layer = &self.layer_names[next_idx];
-                let tensors: Vec<String> = self.pager.inner.tensor_names().iter()
+                let tensors: Vec<String> = self
+                    .pager
+                    .inner
+                    .tensor_names()
+                    .iter()
                     .filter(|n| n.starts_with(next_layer))
                     .map(|s| s.to_string())
                     .collect();
@@ -430,9 +442,9 @@ impl LayerRunner {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use axon_core::{AxonBuilder, DType};
     use std::fs;
     use std::path::PathBuf;
-    use axon_core::{AxonBuilder, DType};
 
     fn test_dir() -> PathBuf {
         let dir = PathBuf::from("output");
@@ -446,16 +458,31 @@ mod tests {
         let mut builder = AxonBuilder::new().model("layer-model").architecture("test");
 
         // Embedding + per-layer tensors
-        builder = builder.add_tensor("tok_embeddings.weight", data.clone(), DType::U8, &[tensor_size as u64]);
+        builder = builder.add_tensor(
+            "tok_embeddings.weight",
+            data.clone(),
+            DType::U8,
+            &[tensor_size as u64],
+        );
 
         for l in 0..tensor_count {
-            for name in &["self_attn.q_proj.weight", "self_attn.v_proj.weight", "mlp.gate_proj.weight"] {
+            for name in &[
+                "self_attn.q_proj.weight",
+                "self_attn.v_proj.weight",
+                "mlp.gate_proj.weight",
+            ] {
                 let tname = format!("model.layers.{}.{}", l, name);
-                builder = builder.add_tensor(&tname, data.clone(), DType::U8, &[tensor_size as u64]);
+                builder =
+                    builder.add_tensor(&tname, data.clone(), DType::U8, &[tensor_size as u64]);
             }
         }
 
-        builder = builder.add_tensor("norm.weight", data.clone(), DType::U8, &[tensor_size as u64]);
+        builder = builder.add_tensor(
+            "norm.weight",
+            data.clone(),
+            DType::U8,
+            &[tensor_size as u64],
+        );
 
         let bytes = builder.build().unwrap();
         fs::write(path, &bytes).unwrap();
@@ -469,13 +496,15 @@ mod tests {
 
         let rt = AxonRuntime::open(&path).unwrap();
         let config = PagingConfig {
-            page_size: 16,  // Small pages for testing
+            page_size: 16, // Small pages for testing
             max_pages: 10,
             ..Default::default()
         };
         let mut pager = PagedRuntime::new(rt, config);
 
-        let data = pager.tensor("model.layers.0.self_attn.q_proj.weight").unwrap();
+        let data = pager
+            .tensor("model.layers.0.self_attn.q_proj.weight")
+            .unwrap();
         assert_eq!(data.len(), 64);
         // First page should be page fault, rest likely hits if we have enough pages
         assert!(pager.stats().page_faults > 0);
@@ -496,12 +525,16 @@ mod tests {
         let mut pager = PagedRuntime::new(rt, config);
 
         // Prefetch a tensor
-        pager.prefetch(&["model.layers.0.self_attn.q_proj.weight"]).unwrap();
+        pager
+            .prefetch(&["model.layers.0.self_attn.q_proj.weight"])
+            .unwrap();
         assert!(pager.stats().prefetches > 0);
 
         // Now accessing it should hit the cache (no new page faults)
-        let faults_before = pager.stats().page_faults;
-        let _data = pager.tensor("model.layers.0.self_attn.q_proj.weight").unwrap();
+        let _faults_before = pager.stats().page_faults;
+        let _data = pager
+            .tensor("model.layers.0.self_attn.q_proj.weight")
+            .unwrap();
         // After prefetch, additional faults depend on page_size vs tensor_size
         // The point is the tensor is accessible
         assert!(!_data.is_empty());
@@ -521,11 +554,16 @@ mod tests {
         };
         let mut pager = PagedRuntime::new(rt, config);
 
-        pager.tensor("model.layers.0.self_attn.q_proj.weight").unwrap();
+        pager
+            .tensor("model.layers.0.self_attn.q_proj.weight")
+            .unwrap();
         let pages_before = pager.pages.len();
 
         pager.release("model.layers.0.self_attn.q_proj.weight");
-        assert!(pager.pages.len() < pages_before, "Release should evict pages");
+        assert!(
+            pager.pages.len() < pages_before,
+            "Release should evict pages"
+        );
     }
 
     #[test]
@@ -556,11 +594,15 @@ mod tests {
         let mut pager = PagedRuntime::new(rt, config);
 
         // First tensor: 128 bytes = 2 pages (fits)
-        pager.tensor("model.layers.0.self_attn.q_proj.weight").unwrap();
+        pager
+            .tensor("model.layers.0.self_attn.q_proj.weight")
+            .unwrap();
         let evictions_before = pager.stats().evictions;
 
         // Second tensor: 128 bytes = 2 pages (causes eviction of first)
-        pager.tensor("model.layers.1.self_attn.q_proj.weight").unwrap();
+        pager
+            .tensor("model.layers.1.self_attn.q_proj.weight")
+            .unwrap();
 
         // Should have evicted at least some pages
         assert!(pager.stats().evictions >= evictions_before);
