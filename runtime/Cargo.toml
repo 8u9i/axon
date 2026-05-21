@@ -26,3 +26,7 @@ crate-type = ["lib"]
 name = "runtime"
 path = "benches/runtime.rs"
 harness = false
+
+[[example]]
+name = "bench_axon"
+path = "../benchmarks/bench_axon.rs"

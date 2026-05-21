@@ -208,6 +208,88 @@ class RuntimeModel:
                 "Specify either (byte_offset, size) or (row_start, row_end)"
             )
 
+    def tensor_rows(self, name: str, start_row: int, end_row: int) -> bytes:
+        """Get contiguous rows from a 2D tensor.
+
+        Uses dtype size and shape to compute exact byte offsets.
+        This is shape-aware partial tensor loading — only the
+        requested rows are loaded from the file.
+
+        Example:
+            rows = model.tensor_rows("layers.0.q_proj.weight", 0, 128)
+
+        Note: Rust runtime supports zero-copy views. Python copies data
+        into a bytes object for compatibility, same as SafeTensors.
+        """
+        return self.tensor_slice(name, row_start=start_row, row_end=end_row)
+
+    def stats(self) -> dict:
+        """Get runtime statistics.
+
+        Returns a dict with tensor count, sizes, dtypes, and file info.
+        """
+        import os
+        file_size = os.path.getsize(str(self._path))
+        dtypes = set()
+        total_data = 0
+        for info in self._tensors.values():
+            dtypes.add(info.dtype)
+            total_data += info.data_size
+
+        return {
+            "file_size_bytes": file_size,
+            "tensor_count": len(self._tensor_order),
+            "payload_size_bytes": self._payload_size,
+            "total_tensor_data_bytes": total_data,
+            "dtypes": sorted(dtypes),
+            "model_name": self._model_name or "N/A",
+            "architecture": self._architecture or "N/A",
+            "note": "Python API copies data into bytes objects. Rust API supports true zero-copy views via mmap.",
+        }
+
+    def to_numpy(self, name: str):
+        byte_offset: Optional[int] = None,
+        size: Optional[int] = None,
+        row_start: Optional[int] = None,
+        row_end: Optional[int] = None,
+    ) -> bytes:
+        """Get a slice of a tensor without loading the full data.
+
+        Supports:
+        - Byte range: tensor_slice(name, byte_offset=0, size=4096)
+        - Row range:  tensor_slice(name, row_start=0, row_end=10)
+
+        For 2D tensors, only the requested byte range is read from
+        the file. The rest of the tensor stays on disk.
+        """
+        info = self.tensor_info(name)
+
+        if byte_offset is not None and size is not None:
+            if byte_offset + size > info.data_size:
+                raise ValueError(
+                    f"Byte range {byte_offset}+{size} exceeds tensor size {info.data_size}"
+                )
+            start = info.data_offset + byte_offset
+            return self._data[start : start + size]
+
+        elif row_start is not None and row_end is not None:
+            if len(info.shape) < 2:
+                raise ValueError(
+                    f"Row slice requires 2D tensor, got {len(info.shape)}D"
+                )
+            cols = info.shape[1]
+            dtype_size = _DTYPE_SIZES.get(info.dtype_code, 4)
+            row_stride = cols * dtype_size
+            byte_off = row_start * row_stride
+            slice_size = (row_end - row_start) * row_stride
+            start = info.data_offset + byte_off
+            return self._data[start : start + slice_size]
+
+        else:
+            raise ValueError(
+                "Specify either (byte_offset, size) or (row_start, row_end)"
+            )
+
     def to_numpy(self, name: str):
         """Get a tensor as a numpy array (requires numpy).
 

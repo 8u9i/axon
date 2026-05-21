@@ -38,9 +38,9 @@
 use std::path::Path;
 use std::sync::Arc;
 
-use axon_core::{AxonError, AxonResult, DType};
+use axon_core::AxonResult;
 
-use crate::runtime::{AxonRuntime, TensorInfo};
+use crate::runtime::AxonRuntime;
 
 /// Trait for page-level tensor access.
 ///

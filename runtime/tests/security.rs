@@ -198,3 +198,76 @@ fn test_corrupt_manifest_json() {
     let result = AxonRuntime::open(&path);
     assert!(result.is_err(), "Corrupt manifest should fail");
 }
+
+#[test]
+fn test_checksum_mismatch() {
+    let path = test_dir().join("checksum_mismatch.axon");
+    let mut bytes = build_valid_axon();
+    let header = AxonHeader::from_bytes(&bytes[..64]).unwrap();
+    let manifest_start = header.manifest_offset as usize;
+    if manifest_start + 10 < bytes.len() {
+        bytes[manifest_start + 10] ^= 0xFF;
+    }
+    write_raw(&path, &bytes);
+    let result = AxonRuntime::open(&path);
+    // Should not crash regardless of checksum
+    drop(result);
+}
+
+#[test]
+fn test_shape_overflow() {
+    let path = test_dir().join("shape_overflow.axon");
+    let mut bytes = build_valid_axon();
+    let header = AxonHeader::from_bytes(&bytes[..64]).unwrap();
+    let tdt_start = (header.manifest_offset + header.manifest_size + 63) & !63;
+    let desc_start = tdt_start as usize;
+    if desc_start + 192 <= bytes.len() {
+        bytes[desc_start + 130..desc_start + 138].copy_from_slice(&1_000_000u64.to_le_bytes());
+        write_raw(&path, &bytes);
+        let rt = AxonRuntime::open(&path).unwrap();
+        let result = rt.tensor_view("weights");
+        drop(result);
+    }
+}
+
+#[test]
+fn test_invalid_dtype_code() {
+    let path = test_dir().join("invalid_dtype.axon");
+    let mut bytes = build_valid_axon();
+    let header = AxonHeader::from_bytes(&bytes[..64]).unwrap();
+    let tdt_start = (header.manifest_offset + header.manifest_size + 63) & !63;
+    let desc_start = tdt_start as usize;
+    if desc_start + 192 <= bytes.len() {
+        bytes[desc_start + 128] = 255;
+        write_raw(&path, &bytes);
+        let rt = AxonRuntime::open(&path).unwrap();
+        let result = rt.tensor_view("weights");
+        drop(result);
+    }
+}
+
+#[test]
+fn test_zero_size_tensor() {
+    let path = test_dir().join("zero_size.axon");
+    let mut builder = AxonBuilder::new();
+    let data: Vec<u8> = vec![];
+    builder = builder.add_tensor("empty", data, DType::U8, &[0]);
+    let bytes = builder.build().unwrap();
+    write_raw(&path, &bytes);
+    let rt = AxonRuntime::open(&path).unwrap();
+    let view = rt.tensor_view("empty").unwrap();
+    assert_eq!(view.len(), 0);
+}
+
+#[test]
+fn test_many_tensors() {
+    let path = test_dir().join("many_tensors.axon");
+    let mut builder = AxonBuilder::new();
+    for i in 0..1000 {
+        builder = builder.add_tensor(&format!("tensor_{:04}", i), vec![i as u8; 4], DType::U8, &[4]);
+    }
+    let bytes = builder.build().unwrap();
+    write_raw(&path, &bytes);
+    let rt = AxonRuntime::open(&path).unwrap();
+    assert_eq!(rt.tensor_count(), 1000);
+}
